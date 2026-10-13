@@ -4,6 +4,7 @@
 #include "triggerlab/HoverClickGate.hpp"
 #include "triggerlab/ClickPermission.hpp"
 #include "triggerlab/ImageFile.hpp"
+#include "triggerlab/ImagePaletteDialog.hpp"
 #include <fstream>
 #include <charconv>
 #include <array>
@@ -40,6 +41,7 @@ struct Preview {
     std::uint64_t clickCount=0;
     ULONGLONG pickDeadline=0,targetDeadline=0;
     std::filesystem::path colorPath;
+    std::optional<triggerlab::Frame> importedImage;
     Preview() {
         wchar_t local[32768]{};auto length=GetEnvironmentVariableW(L"LOCALAPPDATA",local,32768);
         colorPath=length>0 && length<32768?std::filesystem::path(local)/L"TriggerLab"/L"selected-color.json":std::filesystem::path(L"selected-color.json");
@@ -72,16 +74,28 @@ struct Preview {
         if(ChooseColorW(&picker)) {color.target={GetBValue(picker.rgbResult),GetGValue(picker.rgbResult),GetRValue(picker.rgbResult),255};color.space=triggerlab::ColorSpace::RGB;syncColor();status=L"Цвет выбран. Нажмите «Сохранить цвет»";}
     }
     void saveColor() {if(!applyColor()) return;std::string error;status=triggerlab::saveColorProfile(colorPath,color,error)?L"Цвет сохранён / Color saved":L"Ошибка сохранения цвета / Save failed";}
-    bool importImage(const std::filesystem::path& path) {
+    bool importImage(const std::filesystem::path& path,bool edit=false) {
         cancelSelection();disableClicks();
-        const auto loaded=triggerlab::loadImageColor(path);
-        if(!loaded.selected) {status=loaded.error;notice=status;return false;}
-        color.target=loaded.selected->color;color.space=triggerlab::ColorSpace::RGB;syncColor();
+        auto loaded=triggerlab::loadImagePixels(path);
+        if(!loaded.image) {status=loaded.error;notice=status;return false;}
+        auto selected=edit?triggerlab::showImagePalette(window,*loaded.image):triggerlab::dominantImageColor(*loaded.image);
+        if(!selected) {status=edit?L"Выбор цвета отменён; прежний цвет сохранён":L"В изображении нет непрозрачных пикселей";notice=status;return false;}
+        color.target=selected->color;color.space=triggerlab::ColorSpace::RGB;syncColor();
+        importedImage=std::move(loaded.image);
         mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
         status=L"Цвет из файла определён. Нажмите «Сохранить цвет»";
         notice=L"Файл: "+path.filename().wstring().substr(0,30)+L" | Доля оттенка: "+
-            std::to_wstring(static_cast<int>(loaded.selected->coverage*100))+L"%";
+            std::to_wstring(static_cast<int>(selected->coverage*100))+L"%";
         return true;
+    }
+    void editImage() {
+        cancelSelection();disableClicks();
+        if(!importedImage) {status=L"Сначала загрузите изображение кнопкой «Из файла…»";return;}
+        const auto selected=triggerlab::showImagePalette(window,*importedImage);
+        if(!selected) {status=L"Выбор отменён; прежний цвет сохранён";return;}
+        color.target=selected->color;color.space=triggerlab::ColorSpace::RGB;syncColor();
+        mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
+        status=L"Цвет области выбран. Нажмите «Сохранить цвет»";
     }
     void chooseImage() {
         cancelSelection();disableClicks();wchar_t path[32768]{};
@@ -89,7 +103,7 @@ struct Preview {
         dialog.lpstrFilter=L"Изображения (PNG, JPEG, BMP, GIF, TIFF)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0Все файлы\0*.*\0\0";
         dialog.lpstrFile=path;dialog.nMaxFile=32768;dialog.lpstrTitle=L"Определить цвет из изображения";
         dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_EXPLORER;
-        if(GetOpenFileNameW(&dialog)) importImage(path);
+        if(GetOpenFileNameW(&dialog)) importImage(path,true);
         else {status=CommDlgExtendedError()?L"Не удалось открыть выбор файла":L"Выбор изображения отменён";notice=status;}
     }
     void refreshTargetButton() {
@@ -190,6 +204,7 @@ struct Preview {
         CreateWindowW(L"BUTTON",L"Пипетка (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,95,170,30,window,reinterpret_cast<HMENU>(5),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Сохранить цвет",WS_CHILD|WS_VISIBLE|WS_TABSTOP,365,95,175,30,window,reinterpret_cast<HMENU>(6),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Из файла…",WS_CHILD|WS_VISIBLE|WS_TABSTOP,550,95,120,30,window,reinterpret_cast<HMENU>(10),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Палитра / область",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,236,185,28,window,reinterpret_cast<HMENU>(14),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Окно не выбрано\nВыбрать (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_MULTILINE,15,135,240,40,window,reinterpret_cast<HMENU>(7),nullptr,nullptr);
         autoControl=CreateWindowW(L"BUTTON",L"Автоклик в выбранном окне",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,270,135,350,30,window,reinterpret_cast<HMENU>(8),nullptr,nullptr);
         syncColor();refreshTargetButton();SetTimer(window,3,500,nullptr);
@@ -202,6 +217,7 @@ struct Preview {
         else if(id==5) beginSelection(true);
         else if(id==6) saveColor();
         else if(id==7) beginSelection(false);
+        else if(id==14) editImage();
         else if(id>=11 && id<=13) {
             cancelSelection();disableClicks();color.target=basicColors[id-11].pixel;color.space=triggerlab::ColorSpace::RGB;syncColor();
             mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
@@ -244,6 +260,7 @@ struct Preview {
         InvalidateRect(window,nullptr,FALSE);
     }
     bool smokeTest(const std::filesystem::path& path) {
+        if(!triggerlab::imagePaletteDialogSmoke()) return false;
         colorPath=path;
         for(auto edit:colorEdits) if(!IsWindow(edit)) return false;
         const wchar_t* values[]={L"231",L"67",L"19",L"12"};

@@ -10,9 +10,9 @@ struct ComScope {
     ~ComScope() {if(SUCCEEDED(status)) CoUninitialize();}
 };
 }
-ImageFileResult loadImageColor(const std::filesystem::path& path) {
+ImagePixelsResult loadImagePixels(const std::filesystem::path& path) {
     using Microsoft::WRL::ComPtr;
-    auto fail=[](const wchar_t* error) {return ImageFileResult{{},error};};
+    auto fail=[](const wchar_t* error) {return ImagePixelsResult{{},error};};
     try {
         std::error_code error;
         if(!std::filesystem::is_regular_file(path,error) || error) return fail(L"Не удалось открыть файл изображения");
@@ -35,9 +35,13 @@ ImageFileResult loadImageColor(const std::filesystem::path& path) {
            FAILED(converter->Initialize(frame.Get(),GUID_WICPixelFormat32bppBGRA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom))) return fail(L"Не удалось преобразовать изображение в RGB");
         Frame pixels(static_cast<int>(width),static_cast<int>(height));
         if(FAILED(converter->CopyPixels(nullptr,width*4,width*height*4,reinterpret_cast<BYTE*>(pixels.data())))) return fail(L"Не удалось прочитать пиксели изображения");
-        auto selected=dominantImageColor(pixels);
-        if(!selected) return fail(L"В изображении нет пикселей с непрозрачностью не менее 50%");
-        return {selected,{}};
+        return {std::move(pixels),{}};
     } catch(const std::exception&) {return fail(L"Ошибка чтения изображения");}
+}
+ImageFileResult loadImageColor(const std::filesystem::path& path) {
+    auto loaded=loadImagePixels(path);if(!loaded.image) return {{},loaded.error};
+    auto selected=dominantImageColor(*loaded.image);
+    if(!selected) return {{},L"В изображении нет пикселей с непрозрачностью не менее 50%"};
+    return {selected,{}};
 }
 }
