@@ -34,6 +34,10 @@ public:
         since_.reset(); lastSample_.reset(); lastClick_.reset();
         latched_ = ready_ = false;
     }
+    bool clickedHover() const noexcept {return latched_;}
+    std::chrono::milliseconds elapsed(Clock::time_point now) const noexcept {
+        return since_?std::chrono::duration_cast<std::chrono::milliseconds>(now-*since_):std::chrono::milliseconds{0};
+    }
 private:
     std::optional<Clock::time_point> since_, lastSample_, lastClick_;
     bool latched_ = false, ready_ = false;
