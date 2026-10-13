@@ -1,6 +1,7 @@
 #include "triggerlab/TargetDetector.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace triggerlab {
 
@@ -8,8 +9,14 @@ TargetDetector::TargetDetector(DetectorConfig config) { setConfig(config); }
 
 void TargetDetector::setConfig(DetectorConfig config) noexcept {
     config.roiRadius = std::clamp(config.roiRadius, 0, 30);
-    config.minimumCoverage = std::clamp(config.minimumCoverage, 0.01, 1.0);
+    config.minimumCoverage = std::isfinite(config.minimumCoverage)?std::clamp(config.minimumCoverage, 0.01, 1.0):.45;
     config_ = config;
+}
+
+ColorMask TargetDetector::detectColor(const Frame& frame,int centerX,int centerY,const ColorMatchConfig& config) const {
+    if(!frame.contains(centerX,centerY)) return {};
+    const int radius=config_.roiRadius;
+    return makeColorMask(frame,{centerX-radius,centerY-radius,2*radius+1,2*radius+1},config);
 }
 
 Detection TargetDetector::detect(const Frame& frame, int centerX, int centerY) const noexcept {

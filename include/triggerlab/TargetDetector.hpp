@@ -1,6 +1,7 @@
 #pragma once
 
 #include "triggerlab/Frame.hpp"
+#include "triggerlab/ColorMask.hpp"
 
 #include <cstdint>
 
@@ -28,6 +29,7 @@ public:
     [[nodiscard]] const DetectorConfig& config() const noexcept { return config_; }
     [[nodiscard]] Detection detect(const Frame& frame, int centerX, int centerY) const noexcept;
 
+    [[nodiscard]] ColorMask detectColor(const Frame& frame,int centerX,int centerY,const ColorMatchConfig& config) const;
 private:
     DetectorConfig config_;
 };

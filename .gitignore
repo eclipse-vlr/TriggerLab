@@ -18,3 +18,4 @@
 *.ilk
 *.log
 /events.csv
+/codex_handoff_v0_4.json
