@@ -12,6 +12,12 @@
 #include <string>
 #include <optional>
 namespace {
+struct BasicColor {const wchar_t* name;triggerlab::Pixel pixel;};
+constexpr std::array<BasicColor,3> basicColors{{
+    {L"Красный",{0,0,255,255}},
+    {L"Фиолетовый",{255,0,255,255}},
+    {L"Жёлтый",{0,255,255,255}}
+}};
 struct PaintSurface {
     HDC dc=nullptr;HBITMAP bitmap=nullptr;HGDIOBJ previous=nullptr;
     PaintSurface(HDC target,int w,int h) {
@@ -61,6 +67,7 @@ struct Preview {
     }
     void chooseColor() {
         cancelSelection();disableClicks();COLORREF custom[16]{};CHOOSECOLORW picker{};picker.lStructSize=sizeof(picker);picker.hwndOwner=window;
+        for(std::size_t i=0;i<basicColors.size();++i) {const auto p=basicColors[i].pixel;custom[i]=RGB(p.red,p.green,p.blue);}
         picker.rgbResult=RGB(color.target.red,color.target.green,color.target.blue);picker.lpCustColors=custom;picker.Flags=CC_FULLOPEN|CC_RGBINIT;
         if(ChooseColorW(&picker)) {color.target={GetBValue(picker.rgbResult),GetGValue(picker.rgbResult),GetRValue(picker.rgbResult),255};color.space=triggerlab::ColorSpace::RGB;syncColor();status=L"Цвет выбран. Нажмите «Сохранить цвет»";}
     }
@@ -174,6 +181,8 @@ struct Preview {
     void createControls() {
         CreateWindowW(L"BUTTON",L"Start / Начать",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,15,150,30,window,reinterpret_cast<HMENU>(1),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Stop / Остановить",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,15,170,30,window,reinterpret_cast<HMENU>(2),nullptr,nullptr);
+        for(int i=0;i<3;++i) CreateWindowW(L"BUTTON",basicColors[i].name,WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+            365+i*105,15,100,30,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(11+i)),nullptr,nullptr);
         const wchar_t* labels[]={L"R",L"G",L"B",L"Допуск"};
         for(int i=0;i<4;++i) {CreateWindowW(L"STATIC",labels[i],WS_CHILD|WS_VISIBLE,15+i*110,60,50,20,window,nullptr,nullptr,nullptr);colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,(i==3?410:45+i*110),57,60,24,window,nullptr,nullptr,nullptr);}
         CreateWindowW(L"BUTTON",L"Применить RGB",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,55,160,28,window,reinterpret_cast<HMENU>(3),nullptr,nullptr);
@@ -193,6 +202,11 @@ struct Preview {
         else if(id==5) beginSelection(true);
         else if(id==6) saveColor();
         else if(id==7) beginSelection(false);
+        else if(id>=11 && id<=13) {
+            cancelSelection();disableClicks();color.target=basicColors[id-11].pixel;color.space=triggerlab::ColorSpace::RGB;syncColor();
+            mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
+            status=std::wstring(basicColors[id-11].name)+L": основной цвет выбран. Нажмите «Сохранить цвет»";
+        }
         else if(id==10) {chooseImage();SetFocus(window);InvalidateRect(window,nullptr,FALSE);return;}
         else if(id==8) {cancelSelection();if(!running || !targetWindow || !IsWindow(targetWindow)) {disableClicks();status=L"Сначала включите захват и выберите окно";}else {autoClick=SendMessageW(autoControl,BM_GETCHECK,0,0)==BST_CHECKED;gate.reset();if(autoClick && !RegisterHotKey(window,9,MOD_NOREPEAT,VK_F9)) {disableClicks();status=L"F9 занят: автоклик не включён";notice=status;InvalidateRect(window,nullptr,FALSE);return;}if(!autoClick) UnregisterHotKey(window,9);status=autoClick?L"Автоклик включён только в выбранном окне":L"Автоклик выключен";}}
         else return;
@@ -242,6 +256,14 @@ struct Preview {
         SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
         if(autoClick || SendMessageW(autoControl,BM_GETCHECK,0,0)!=BST_UNCHECKED) return false;
         command(1);if(!running) return false;command(2);
+        for(int i=0;i<3;++i) {
+            pickDeadline=GetTickCount64()+3000;command(11+i);
+            const auto expected=basicColors[i].pixel;
+            if(color.target.red!=expected.red || color.target.green!=expected.green || color.target.blue!=expected.blue ||
+               color.space!=triggerlab::ColorSpace::RGB || pickDeadline || autoClick) return false;
+            command(6);const auto saved=triggerlab::loadColorProfile(path);
+            if(!saved.ok || saved.color.target.red!=expected.red || saved.color.target.green!=expected.green || saved.color.target.blue!=expected.blue) return false;
+        }
         // Exercise one-shot sampling with a known pixel, independently of Start
         // and of the desktop content / user's cursor. No OS input is sent.
         triggerlab::CaptureSample pixel;
