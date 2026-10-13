@@ -1,19 +1,41 @@
 #pragma once
 #include "triggerlab/TriggerEngine.hpp"
+#include <optional>
+
 namespace triggerlab {
-// A sustained match produces one event; invalid captures never rearm a fired match.
+// Observe fresh samples, then acknowledge only input actually sent to the OS.
+// Unknown samples interrupt dwell but never rearm an already clicked hover.
 class HoverClickGate {
 public:
-    bool step(bool valid,bool matching,Clock::time_point now) noexcept {
-        if(!valid) {frames_=0;return false;}
-        if(!matching) {frames_=0;latched_=false;return false;}
-        if(latched_) return false;
-        if(frames_<2) ++frames_;
-        if(frames_<2 || now<next_) return false;
-        latched_=true;frames_=0;next_=now+std::chrono::milliseconds{250};return true;
+    static constexpr std::chrono::milliseconds dwell{70};
+    static constexpr std::chrono::milliseconds cooldown{50};
+    static constexpr std::chrono::milliseconds maximumSampleGap{50};
+
+    bool step(bool valid, bool matching, Clock::time_point now) noexcept {
+        ready_ = false;
+        if (!valid) { since_.reset(); lastSample_.reset(); return false; }
+        if (!matching) {
+            since_.reset(); lastSample_.reset(); latched_ = false;
+            return false;
+        }
+        if (latched_) return false;
+        if (!lastSample_ || now < *lastSample_ || now - *lastSample_ > maximumSampleGap)
+            since_ = now;
+        lastSample_ = now;
+        ready_ = now - *since_ >= dwell && (!lastClick_ || now - *lastClick_ >= cooldown);
+        return ready_;
     }
-    void reset() noexcept {frames_=0;latched_=false;next_={};}
+    void acknowledgeClick(Clock::time_point now) noexcept {
+        if (!ready_) return;
+        latched_ = true; ready_ = false;
+        since_.reset(); lastSample_.reset(); lastClick_ = now;
+    }
+    void reset() noexcept {
+        since_.reset(); lastSample_.reset(); lastClick_.reset();
+        latched_ = ready_ = false;
+    }
 private:
-    int frames_=0;bool latched_=false;Clock::time_point next_{};
+    std::optional<Clock::time_point> since_, lastSample_, lastClick_;
+    bool latched_ = false, ready_ = false;
 };
 }

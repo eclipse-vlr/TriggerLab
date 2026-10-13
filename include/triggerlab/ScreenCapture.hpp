@@ -4,7 +4,7 @@
 #include <memory>
 #include <optional>
 namespace triggerlab {
-enum class CaptureStatus { Ok, InvalidRegion, DesktopUnavailable, AllocationFailed, CopyFailed };
+enum class CaptureStatus { Ok, InvalidRegion, DesktopUnavailable, AllocationFailed, CopyFailed, CursorMoved };
 struct CapturePoint {int x=0,y=0;};
 struct CaptureSample {
     CaptureStatus status=CaptureStatus::DesktopUnavailable;

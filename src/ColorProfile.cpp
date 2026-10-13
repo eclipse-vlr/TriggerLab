@@ -17,8 +17,11 @@ ColorProfileResult deserializeColorProfile(std::string_view json) {
     for(;;) {
         if(!take('"')) return fail();const auto start=p;
         while(p<json.size() && ((json[p]>='a' && json[p]<='z') || json[p]=='_')) ++p;
-        std::string key(json.substr(start,p-start));if(!take('"') || !take(':')) return fail();
-        ws();int value=0;const auto result=std::from_chars(json.data()+p,json.data()+json.size(),value);
+        std::string key(json.substr(start,p-start));
+        if(p>=json.size() || json[p]!='"') return fail();
+        ++p;if(!take(':')) return fail();
+        ws();if(p>=json.size() || json[p]<'0' || json[p]>'9') return fail();
+        int value=0;const auto result=std::from_chars(json.data()+p,json.data()+json.size(),value);
         if(result.ec!=std::errc{} || result.ptr==json.data()+p || value<0 || value>255) return fail();
         if(json[p]=='0' && result.ptr>json.data()+p+1) return fail();
         p=static_cast<std::size_t>(result.ptr-json.data());if(!values.emplace(key,value).second) return fail();

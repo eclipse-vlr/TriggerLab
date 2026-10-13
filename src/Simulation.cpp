@@ -25,6 +25,7 @@ void Simulation::setConfig(SceneConfig config) noexcept {
     config_=config; reset();
 }
 void Simulation::advance(double deltaSeconds) noexcept {
+    if(!std::isfinite(deltaSeconds)) return;
     const double delta = std::clamp(deltaSeconds, 0.0, 0.1);
     timeSeconds_ += delta * config_.speed;
     hitFlashSeconds_ = std::max(0.0, hitFlashSeconds_ - delta);

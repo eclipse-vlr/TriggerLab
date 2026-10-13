@@ -78,7 +78,15 @@ CaptureSample ScreenCapture::captureCursor(int side) {
     const auto roi=cursorRegion(point.x,point.y,side,bounds);
     if(!roi) {CaptureSample failed; failed.status=CaptureStatus::InvalidRegion; return failed;}
     auto result=capture(*roi);
-    if(result.frame) {result.cursorPixel=result.frame->at(static_cast<int>(point.x-result.region.x),static_cast<int>(point.y-result.region.y));result.cursorPosition=CapturePoint{point.x,point.y};}
+    if(result.frame) {
+        POINT current{};
+        if(!GetCursorPos(&current) || current.x!=point.x || current.y!=point.y) {
+            CaptureSample failed;failed.status=CaptureStatus::CursorMoved;return failed;
+        }
+        const int x=static_cast<int>(point.x-result.region.x),y=static_cast<int>(point.y-result.region.y);
+        if(!result.frame->contains(x,y)) {CaptureSample failed;failed.status=CaptureStatus::InvalidRegion;return failed;}
+        result.cursorPixel=result.frame->at(x,y);result.cursorPosition=CapturePoint{point.x,point.y};
+    }
     return result;
 }
 }

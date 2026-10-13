@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 void check(bool value,const char* why) { if(!value) { std::cerr<<why<<'\n'; std::exit(1); } }
 int colored(const triggerlab::Frame& frame) {
     int count=0; for(int y=0;y<frame.height();++y) for(int x=0;x<frame.width();++x) {auto p=frame.at(x,y); if(p.red>200 && p.blue>200 && p.green<100) ++count;} return count;
@@ -46,6 +47,9 @@ int main() {
     scene.setConfig({SceneProfile::Multiple,1}); scene.render(frame); check(colored(frame)>classic*2,"multiple targets rendered");
     scene.setConfig({SceneProfile::Precision,1}); scene.render(frame); check(colored(frame)<classic/2 && detector.detect(frame,480,270).found,"precision smaller and detectable");
     scene.setConfig({SceneProfile::Crossing,2}); scene.advance(.05); check(std::abs(scene.elapsedSeconds()-.1)<1e-9,"speed scales scene time");
+    scene.advance(std::numeric_limits<double>::quiet_NaN());
+    scene.advance(std::numeric_limits<double>::infinity());
+    check(std::abs(scene.elapsedSeconds()-.1)<1e-9,"invalid timestep does not poison scene geometry");
     scene.onSimulatedShot(); scene.reset(); check(scene.elapsedSeconds()==0 && !scene.isHitFlashActive() && scene.config().speed==2,"reset preserves profile");
     scene.setConfig({static_cast<SceneProfile>(99),100}); check(scene.config().profile==SceneProfile::Crossing && scene.config().speed==3,"scene clamping");
     Frame tiny(16,16); for(auto profile:{SceneProfile::Crossing,SceneProfile::Multiple,SceneProfile::Precision}) {scene.setConfig({profile,1});scene.render(tiny);scene.onSimulatedShot();scene.render(tiny);}
