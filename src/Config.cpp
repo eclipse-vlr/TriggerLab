@@ -10,7 +10,8 @@
 #endif
 namespace triggerlab {
 bool validSettings(const Settings& s) noexcept {
-    return s.engine.cooldown.count() >= 50 && s.engine.cooldown.count() <= 2000 &&
+    return static_cast<int>(s.scene.profile)>=0 && static_cast<int>(s.scene.profile)<=2 &&
+        std::isfinite(s.scene.speed) && s.scene.speed>=.25 && s.scene.speed<=3 && s.engine.cooldown.count() >= 50 && s.engine.cooldown.count() <= 2000 &&
         s.engine.stableFrames >= 1 && s.engine.stableFrames <= 20 &&
         s.detector.roiRadius >= 0 && s.detector.roiRadius <= 30 &&
         std::isfinite(s.detector.minimumCoverage) && s.detector.minimumCoverage >= .01 && s.detector.minimumCoverage <= 1;
@@ -24,7 +25,9 @@ std::string serializeSettings(const Settings& s) {
         << ",\n  \"minimum_coverage\": " << s.detector.minimumCoverage
         << ",\n  \"minimum_red\": " << int(s.detector.minimumRed)
         << ",\n  \"minimum_blue\": " << int(s.detector.minimumBlue)
-        << ",\n  \"maximum_green\": " << int(s.detector.maximumGreen) << "\n}\n";
+        << ",\n  \"maximum_green\": " << int(s.detector.maximumGreen)
+        << ",\n  \"scene_profile\": " << static_cast<int>(s.scene.profile)
+        << ",\n  \"scene_speed\": " << s.scene.speed << "\n}\n";
     return out.str();
 }
 ConfigResult deserializeSettings(std::string_view json) {
@@ -62,12 +65,18 @@ ConfigResult deserializeSettings(std::string_view json) {
         if (take('}')) break;
         if (!take(',')) return fail();
     }
-    whitespace(); if (p!=json.size() || values.size()!=7) return fail();
+    whitespace(); if (p!=json.size() || (values.size()!=7 && values.size()!=9)) return fail();
     const char* keys[] = {"cooldown_ms","roi_radius","stable_frames","minimum_coverage","minimum_red","minimum_blue","maximum_green"};
     for (auto key : keys) if (!values.contains(key)) return fail();
     for (auto key : keys) if (std::string_view(key)!="minimum_coverage" && (std::floor(values[key])!=values[key] || values[key]<0 || values[key]>2000)) return fail();
     for (auto key : {"minimum_red","minimum_blue","maximum_green"}) if (values[key]>255) return fail();
+    if(values.size()==9 && (!values.contains("scene_profile") || !values.contains("scene_speed"))) return fail();
     Settings s;
+    if(values.size()==9) {
+        auto profile=values["scene_profile"]; auto speed=values["scene_speed"];
+        if(profile<0 || profile>2 || std::floor(profile)!=profile || speed<.25 || speed>3) return fail();
+        s.scene={static_cast<SceneProfile>(static_cast<int>(profile)),speed};
+    }
     s.engine.cooldown=std::chrono::milliseconds{static_cast<int>(values["cooldown_ms"])};
     s.engine.stableFrames=static_cast<int>(values["stable_frames"]);
     s.detector.roiRadius=static_cast<int>(values["roi_radius"]);

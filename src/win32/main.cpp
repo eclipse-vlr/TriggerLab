@@ -7,6 +7,9 @@
 #include <cwchar>
 #include <sstream>
 #include <iomanip>
+#include <fstream>
+#include <charconv>
+#include "triggerlab/Diagnostics.hpp"
 #include "triggerlab/Simulation.hpp"
 #include "triggerlab/TargetDetector.hpp"
 #include "triggerlab/TriggerEngine.hpp"
@@ -38,6 +41,18 @@ void drawText(HDC dc, int x, int y, const std::wstring& text) {
     TextOutW(dc, x, y, text.c_str(), static_cast<int>(text.size()));
 }
 
+std::wstring formatNumber(double value) {
+    char buffer[64]{}; const auto result=std::to_chars(buffer,buffer+sizeof(buffer),value);
+    const std::string text(buffer,result.ptr); return std::wstring(text.begin(),text.end());
+}
+const wchar_t* sceneLabel(triggerlab::SceneProfile profile) noexcept {
+    switch(profile) {
+        case triggerlab::SceneProfile::Crossing: return L"Crossing";
+        case triggerlab::SceneProfile::Multiple: return L"Multiple targets";
+        case triggerlab::SceneProfile::Precision: return L"Precision";
+    }
+    return L"Unknown";
+}
 class App {
 public:
     App()
@@ -48,7 +63,7 @@ public:
         if (length > 0 && length < 32768) configPath_ = std::filesystem::path(localAppData) / L"TriggerLab" / L"settings.json";
         else { configPath_ = std::filesystem::path(L"settings.json"); }
         const auto loaded = triggerlab::loadSettings(configPath_);
-        engine_.setConfig(loaded.settings.engine); detector_.setConfig(loaded.settings.detector);
+        engine_.setConfig(loaded.settings.engine); detector_.setConfig(loaded.settings.detector); simulation_.setConfig(loaded.settings.scene);
         configStatus_ = std::wstring(loaded.message.begin(), loaded.message.end());
         simulation_.render(frame_);
     }
@@ -58,29 +73,47 @@ public:
         const wchar_t* labels[] = {L"Cooldown ms [50..2000]", L"ROI radius [0..30]", L"Stable frames [1..20]",
             L"Coverage [0.01..1]", L"Minimum red [0..255]", L"Minimum blue [0..255]", L"Maximum green [0..255]"};
         for (int i=0; i<7; ++i) {
-            CreateWindowW(L"STATIC", labels[i], WS_CHILD|WS_VISIBLE, 976, 55+i*48, 250, 20, window_, nullptr, nullptr, nullptr);
+            CreateWindowW(L"STATIC", labels[i], WS_CHILD|WS_VISIBLE, 976, 55+i*36, 250, 20, window_, nullptr, nullptr, nullptr);
             edits_[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,
-                976,75+i*48,240,24,window_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
+                976,73+i*36,240,24,window_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
         }
-        CreateWindowW(L"BUTTON",L"Apply and save",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,410,240,30,window_,reinterpret_cast<HMENU>(201),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Reset statistics / scene",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,450,240,30,window_,reinterpret_cast<HMENU>(202),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Apply and save",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,340,240,30,window_,reinterpret_cast<HMENU>(201),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Reset statistics / scene",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,375,240,30,window_,reinterpret_cast<HMENU>(202),nullptr,nullptr);
+        CreateWindowW(L"STATIC",L"Scene / speed [0.25..3]",WS_CHILD|WS_VISIBLE,976,418,240,20,window_,nullptr,nullptr,nullptr);
+        sceneControl_=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,976,442,240,180,window_,reinterpret_cast<HMENU>(203),nullptr,nullptr);
+        for(auto label:{L"Crossing (classic)",L"Multiple targets",L"Precision (small target)"}) SendMessageW(sceneControl_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
+        speedControl_=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"1",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,976,478,240,24,window_,nullptr,nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Apply scene and save",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,510,240,30,window_,reinterpret_cast<HMENU>(204),nullptr,nullptr);
+        pauseControl_=CreateWindowW(L"BUTTON",L"Pause scene (P)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,550,240,30,window_,reinterpret_cast<HMENU>(205),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Export event log (CSV)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,590,240,30,window_,reinterpret_cast<HMENU>(206),nullptr,nullptr);
         syncControls();
     }
     void syncControls() {
         const auto e=engine_.config(); const auto d=detector_.config();
-        std::wostringstream coverage; coverage.imbue(std::locale::classic()); coverage << std::setprecision(17) << d.minimumCoverage;
         const std::array<std::wstring,7> values{std::to_wstring(e.cooldown.count()),std::to_wstring(d.roiRadius),
-            std::to_wstring(e.stableFrames),coverage.str(),std::to_wstring(d.minimumRed),
+            std::to_wstring(e.stableFrames),formatNumber(d.minimumCoverage),std::to_wstring(d.minimumRed),
             std::to_wstring(d.minimumBlue),std::to_wstring(d.maximumGreen)};
         for (int i=0;i<7;++i) if (edits_[i]) SetWindowTextW(edits_[i],values[i].c_str());
+        SendMessageW(sceneControl_,CB_SETCURSEL,static_cast<WPARAM>(simulation_.config().profile),0);
+        SetWindowTextW(speedControl_,formatNumber(simulation_.config().speed).c_str());
     }
     void save() {
         std::string error;
-        if (triggerlab::saveSettings(configPath_,{engine_.config(),detector_.config()},error)) configStatus_=L"Settings saved";
+        if (triggerlab::saveSettings(configPath_,{engine_.config(),detector_.config(),simulation_.config()},error)) configStatus_=L"Settings saved";
         else configStatus_=L"Save failed: " + std::wstring(error.begin(),error.end());
     }
     void command(int id) {
-        if (id!=201 && id!=202) return;
+        if(id==204) {
+            wchar_t value[128]{}; GetWindowTextW(speedControl_,value,128);
+            std::wistringstream input(value); input.imbue(std::locale::classic()); double speed=0;
+            const auto selected=SendMessageW(sceneControl_,CB_GETCURSEL,0,0);
+            if(input>>speed && (input>>std::ws).eof() && std::isfinite(speed) && speed>=.25 && speed<=3 && selected>=0 && selected<=2) {
+                simulation_.setConfig({static_cast<triggerlab::SceneProfile>(selected),speed});
+                resetSession(); save(); syncControls();
+            } else configStatus_=L"Invalid scene settings: not changed";
+        } else if(id==205) togglePause();
+        else if(id==206) exportLog();
+        else if(id!=201 && id!=202) return;
         if (id==202) onKeyDown('R',0);
         if (id==201) {
             const char* keys[]={"cooldown_ms","roi_radius","stable_frames","minimum_coverage","minimum_red","minimum_blue","maximum_green"};
@@ -98,9 +131,27 @@ public:
         }
         SetFocus(window_); InvalidateRect(window_,nullptr,FALSE);
     }
+    void resetSession() {
+        holdingSpace_=false; engine_.reset(); diagnostics_.reset(); simulation_.reset();
+        simulation_.render(frame_); lastDetection_={}; lastResult_={}; previousTick_=triggerlab::Clock::now();
+    }
+    void togglePause() {
+        paused_=!paused_; holdingSpace_=false;
+        lastResult_=engine_.step({false,false},triggerlab::Clock::now());
+        diagnostics_.observe({false,false},lastResult_,triggerlab::Clock::now());
+        SetWindowTextW(pauseControl_,paused_?L"Resume scene (P)":L"Pause scene (P)");
+    }
+    void exportLog() {
+        try {
+            const auto path=configPath_.parent_path()/L"events.csv";
+            if(!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
+            std::ofstream out(path,std::ios::binary|std::ios::trunc); out<<diagnostics_.csv(); out.close();
+            configStatus_=out?L"Event log saved beside settings: events.csv":L"Event log export failed";
+        } catch(const std::exception&) { configStatus_=L"Event log export failed"; }
+    }
     bool smokeTest(const std::filesystem::path& path) {
         configPath_=path;
-        engine_.setConfig({}); detector_.setConfig({}); syncControls();
+        engine_.setConfig({}); detector_.setConfig({}); simulation_.setConfig({}); syncControls();
         for(auto edit:edits_) if(!IsWindow(edit)) return false;
         onKeyDown('R',0); tick(); if(engine_.shotCount()!=0) return false;
         onKeyDown(VK_SPACE,0); tick(); tick(); onKeyUp(VK_SPACE);
@@ -111,13 +162,20 @@ public:
         if(!loaded.ok || loaded.settings.engine.cooldown.count()!=725) return false;
         SetWindowTextW(edits_[0],L"invalid"); command(201);
         if(engine_.config().cooldown.count()!=725) return false;
-        command(202); return engine_.shotCount()==0;
+        if(diagnostics_.sampleCount()!=1) return false;
+        command(205); if(!paused_ || holdingSpace_) return false; command(205);
+        SendMessageW(sceneControl_,CB_SETCURSEL,1,0); SetWindowTextW(speedControl_,L"1.5"); command(204);
+        if(simulation_.config().profile!=triggerlab::SceneProfile::Multiple || simulation_.config().speed!=1.5) return false;
+        const auto restored=triggerlab::loadSettings(path);
+        if(!restored.ok || restored.settings.scene.speed!=1.5) return false;
+        command(206); if(!std::filesystem::exists(path.parent_path()/L"events.csv")) return false;
+        command(202); return engine_.shotCount()==0 && diagnostics_.sampleCount()==0;
     }
     void onFocusLost() noexcept { holdingSpace_ = false; }
 
     void onKeyDown(WPARAM key, LPARAM lparam) {
         if (key == VK_SPACE) {
-            holdingSpace_ = true;
+            holdingSpace_ = !paused_;
             return;
         }
         if (key == VK_ESCAPE) {
@@ -125,12 +183,9 @@ public:
             return;
         }
         if ((lparam & (1LL << 30)) != 0) return; // avoid key-repeat toggles
-        if (key == 'R') {
-            engine_.reset();
-            simulation_ = triggerlab::Simulation{kFrameWidth, kFrameHeight};
-            simulation_.render(frame_);
-            lastDetection_ = {};
-            lastResult_ = {};
+        if (key == 'P') togglePause();
+        else if (key == 'R') {
+            resetSession();
         } else if (key == VK_UP || key == VK_DOWN) {
             auto config = engine_.config();
             const int change = (key == VK_UP) ? 25 : -25;
@@ -158,10 +213,11 @@ public:
             fps_ = fps_ == 0.0 ? instantaneousFps : fps_ * 0.9 + instantaneousFps * 0.1;
         }
 
-        simulation_.advance(dt);
+        if(!paused_) simulation_.advance(dt);
         simulation_.render(frame_);
         lastDetection_ = detector_.detect(frame_, frame_.width() / 2, frame_.height() / 2);
         lastResult_ = engine_.step({holdingSpace_, lastDetection_.found}, now);
+        diagnostics_.observe({holdingSpace_,lastDetection_.found},lastResult_,now);
         if (lastResult_.fired) simulation_.onSimulatedShot();
         InvalidateRect(window_, nullptr, FALSE);
     }
@@ -175,11 +231,11 @@ public:
         bitmap.bmiHeader.biBitCount = 32;
         bitmap.bmiHeader.biCompression = BI_RGB;
 
-        FillRect(dc,&client,GetSysColorBrush(COLOR_BTNFACE));
+        SetDCBrushColor(dc,RGB(31,38,48)); FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         RECT panel{960,0,client.right,client.bottom};
-        FillRect(dc,&panel,GetSysColorBrush(COLOR_BTNFACE));
-        SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(20,20,20));
-        drawText(dc,976,18,L"SETTINGS - v0.2");
+        FillRect(dc,&panel,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(225,230,238));
+        drawText(dc,976,18,L"SETTINGS / SCENE - v0.3");
         const int displayWidth = std::min(960L, client.right - client.left);
         const int displayHeight = std::min(540L, client.bottom - client.top);
         if (displayWidth <= 0 || displayHeight <= 0) return;
@@ -208,8 +264,8 @@ public:
         SetTextColor(dc, RGB(246, 246, 252));
         const int fontHeight = 18;
         const int textX = 18;
-        drawText(dc, textX, 18, L"TRIGGERLAB v0.2  |  LOCAL PRACTICE SANDBOX");
-        drawText(dc, textX, 18 + fontHeight, L"HOLD SPACE: arm  |  R: reset  |  ESC: exit");
+        drawText(dc, textX, 18, L"TRIGGERLAB v0.3  |  LOCAL PRACTICE SANDBOX");
+        drawText(dc, textX, 18 + fontHeight, L"HOLD SPACE: arm  |  P: pause  |  R: reset  |  ESC: exit");
         drawText(dc, textX, 18 + fontHeight * 2,
                  L"UP/DOWN: cooldown  |  LEFT/RIGHT: detection ROI");
 
@@ -231,6 +287,16 @@ public:
                  L"px  |  FPS: " + std::to_wstring(static_cast<int>(std::lround(fps_))));
 
         drawText(dc,textX,textY + fontHeight*4,L"Stable frames: " + std::to_wstring(engine_.config().stableFrames));
+        auto metric=[](std::optional<double> value) { if(!value) return std::wstring(L"--"); return std::to_wstring(static_cast<int>(std::lround(*value))); };
+        drawText(dc,textX,textY+fontHeight*5,L"Detection to shot: P50 " + metric(diagnostics_.percentile(.50))+L" ms / P95 "+metric(diagnostics_.percentile(.95))+L" ms | Samples: "+std::to_wstring(diagnostics_.sampleCount()));
+        drawText(dc,textX,textY+fontHeight*6,std::wstring(L"Scene: ")+sceneLabel(simulation_.config().profile)+L" | Speed: "+formatNumber(simulation_.config().speed)+(paused_?L" | PAUSED":L" | RUNNING"));
+        drawText(dc,textX,textY+fontHeight*7,L"Recent events: "+std::to_wstring(diagnostics_.events().size()));
+        int eventY=displayHeight-145;
+        const auto& events=diagnostics_.events();
+        for(std::size_t i=events.size()>3?events.size()-3:0;i<events.size();++i) {
+            const auto& event=events[i];
+            drawText(dc,textX,eventY,L"+"+std::to_wstring(static_cast<int>(event.elapsedMs))+L"ms "+stateLabel(event.state)+(event.fired?L" SIMULATED SHOT":L"")+L" | target "+(event.targetVisible?L"YES":L"NO")); eventY+=fontHeight;
+        }
         drawText(dc,textX,displayHeight-52,configStatus_);
         if (simulation_.isHitFlashActive()) {
             SetTextColor(dc, RGB(123, 255, 170));
@@ -244,6 +310,9 @@ private:
     std::filesystem::path configPath_;
     std::wstring configStatus_;
     std::array<HWND,7> edits_{};
+    HWND sceneControl_=nullptr, speedControl_=nullptr, pauseControl_=nullptr;
+    triggerlab::Diagnostics diagnostics_;
+    bool paused_=false;
     HWND window_ = nullptr;
     triggerlab::Frame frame_;
     triggerlab::Simulation simulation_;
@@ -267,9 +336,13 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     }
     auto* app = reinterpret_cast<App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     switch (message) {
+        case WM_CTLCOLORSTATIC: {
+            HDC dc=reinterpret_cast<HDC>(wparam); SetTextColor(dc,RGB(225,230,238)); SetBkColor(dc,RGB(31,38,48));
+            SetDCBrushColor(dc,RGB(31,38,48)); return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+        }
         case WM_GETMINMAXINFO: {
             auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-            RECT minimum{0,0,kFrameWidth+280,kFrameHeight};
+            RECT minimum{0,0,kFrameWidth+280,640};
             AdjustWindowRect(&minimum,WS_OVERLAPPEDWINDOW,FALSE);
             limits->ptMinTrackSize={minimum.right-minimum.left,minimum.bottom-minimum.top};
             return 0;
@@ -336,7 +409,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
             return 1;
         }
 
-        RECT rect{0, 0, kFrameWidth+280, kFrameHeight};
+        RECT rect{0, 0, kFrameWidth+280, 640};
         AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
         HWND window = CreateWindowExW(0, className, L"TriggerLab - Local Practice Sandbox",
                                       WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,

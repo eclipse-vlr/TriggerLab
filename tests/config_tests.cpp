@@ -7,18 +7,20 @@ void check(bool value, const char* message) { if (!value) { std::cerr << message
 int main() {
     using namespace triggerlab;
     Settings s; s.engine.cooldown=std::chrono::milliseconds{725}; s.engine.stableFrames=7;
-    s.detector={30,.789,255,0,255};
+    s.detector={30,.789,255,0,255}; s.scene={SceneProfile::Precision,2.75};
     const auto json=serializeSettings(s); const auto parsed=deserializeSettings(json);
     check(parsed.ok && serializeSettings(parsed.settings)==json,"non-default round trip");
     check(deserializeSettings(serializeSettings(Settings{})).ok,"defaults round trip");
     const auto base=serializeSettings(Settings{});
+    auto legacy=base.substr(0,base.find(",\n  \"scene_profile\""))+"\n}\n";
+    check(deserializeSettings(legacy).ok && deserializeSettings(legacy).settings.scene.speed==1,"v0.2 schema compatibility");
     auto changed=[&](std::string from,std::string to) {auto data=base; data.replace(data.find(from),from.size(),to); return data;};
     for (const auto& data : {std::string(""),std::string("{}"),std::string("[]"),base+"false",
         changed("180","49"),changed("180","2001"),changed("180","true"),changed("180","\"180\""),
         changed("180","1e999"),changed("180","0180"),changed("180","180.5"),
         changed("\"roi_radius\": 5","\"roi_radius\": -1"),changed("\"roi_radius\": 5","\"roi_radius\": 31"),
         changed("\"stable_frames\": 2","\"stable_frames\": 0"),changed("\"stable_frames\": 2","\"stable_frames\": 21"),
-        changed("160","256"),changed("150","-1"),changed("130","null"),
+        changed("\"scene_profile\": 0","\"scene_profile\": 3"),changed("\"scene_speed\": 1","\"scene_speed\": 0"),changed("\"scene_speed\": 1","\"scene_speed\": 4"),changed("160","256"),changed("150","-1"),changed("130","null"),
         changed("\"minimum_coverage\": 0.45000000000000001","\"minimum_coverage\": 0"),
         changed("\"roi_radius\"","\"unknown\""),changed("\"roi_radius\"","\"cooldown_ms\"")}) {
         auto result=deserializeSettings(data);

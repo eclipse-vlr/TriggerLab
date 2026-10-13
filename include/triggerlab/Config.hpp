@@ -1,11 +1,12 @@
 #pragma once
 #include "triggerlab/TargetDetector.hpp"
+#include "triggerlab/Simulation.hpp"
 #include "triggerlab/TriggerEngine.hpp"
 #include <filesystem>
 #include <string>
 #include <string_view>
 namespace triggerlab {
-struct Settings { EngineConfig engine; DetectorConfig detector; };
+struct Settings { EngineConfig engine; DetectorConfig detector; SceneConfig scene; };
 struct ConfigResult { Settings settings{}; bool ok = false; std::string message; };
 bool validSettings(const Settings& settings) noexcept;
 std::string serializeSettings(const Settings& settings);
