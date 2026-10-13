@@ -1,4 +1,5 @@
 #include "triggerlab/Diagnostics.hpp"
+#include "triggerlab/AimInput.hpp"
 #include "triggerlab/Simulation.hpp"
 #include "triggerlab/TargetDetector.hpp"
 #include <cmath>
@@ -10,6 +11,15 @@ int colored(const triggerlab::Frame& frame) {
 }
 int main() {
     using namespace triggerlab; using namespace std::chrono_literals;
+    AimInput aim;
+    check(aim.x()==480 && aim.y()==270 && !aim.active(),"aim defaults");
+    aim.move(0,0); aim.press(); check(aim.active() && aim.x()==0,"mouse arms inside scene");
+    aim.move(960,100); check(!aim.active() && aim.x()==0,"panel cannot arm or move aim");
+    aim.move(-1,100); check(!aim.inside(),"signed capture coordinates");
+    aim.move(959,539); check(aim.active(),"captured drag returns to scene");
+    aim.release(); check(!aim.active(),"mouse release disarms");
+    aim.press(); aim.leave(); check(!aim.active(),"mouse leave disarms");
+    aim.center(); check(aim.x()==480 && aim.y()==270 && !aim.active(),"right click centers and disarms");
     Diagnostics metrics; const auto t=Clock::time_point{}+1s;
     check(!metrics.percentile(.5),"empty percentile");
     for(int i=1;i<=20;++i) {

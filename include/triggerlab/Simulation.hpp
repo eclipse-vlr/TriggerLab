@@ -14,7 +14,7 @@ public:
     void reset() noexcept { timeSeconds_=0; hitFlashSeconds_=0; }
     void advance(double deltaSeconds) noexcept;
     void render(Frame& frame) const noexcept;
-    void onSimulatedShot() noexcept;
+    void onSimulatedShot(int aimX = -1, int aimY = -1) noexcept;
     [[nodiscard]] bool isHitFlashActive() const noexcept { return hitFlashSeconds_ > 0.0; }
     [[nodiscard]] double elapsedSeconds() const noexcept { return timeSeconds_; }
 

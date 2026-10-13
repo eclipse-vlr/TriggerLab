@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <windowsx.h>
+#include "triggerlab/AimInput.hpp"
 
 #include "triggerlab/Frame.hpp"
 #include "triggerlab/Config.hpp"
@@ -53,6 +55,29 @@ const wchar_t* sceneLabel(triggerlab::SceneProfile profile) noexcept {
     }
     return L"Unknown";
 }
+// Own one compatible surface; never expose the intermediate erase/draw stages.
+class BackBuffer {
+public:
+    ~BackBuffer() { clear(); }
+    BackBuffer()=default;
+    BackBuffer(const BackBuffer&)=delete;
+    BackBuffer& operator=(const BackBuffer&)=delete;
+    bool ensure(HDC screen,int width,int height) noexcept {
+        if(dc_ && width==width_ && height==height_) return true;
+        if(width<=0 || height<=0) return false;
+        HDC dc=CreateCompatibleDC(screen); if(!dc) return false;
+        HBITMAP bitmap=CreateCompatibleBitmap(screen,width,height);
+        if(!bitmap) { DeleteDC(dc); return false; }
+        HGDIOBJ previous=SelectObject(dc,bitmap);
+        if(!previous || previous==HGDI_ERROR) { DeleteObject(bitmap); DeleteDC(dc); return false; }
+        clear(); dc_=dc; bitmap_=bitmap; previous_=previous; width_=width; height_=height; return true;
+    }
+    HDC dc() const noexcept {return dc_;}
+private:
+    void clear() noexcept { if(dc_) {SelectObject(dc_,previous_); DeleteObject(bitmap_); DeleteDC(dc_);} dc_=nullptr; }
+    HDC dc_=nullptr; HBITMAP bitmap_=nullptr; HGDIOBJ previous_=nullptr;
+    int width_=0,height_=0;
+};
 class App {
 public:
     App()
@@ -132,11 +157,11 @@ public:
         SetFocus(window_); InvalidateRect(window_,nullptr,FALSE);
     }
     void resetSession() {
-        holdingSpace_=false; engine_.reset(); diagnostics_.reset(); simulation_.reset();
+        holdingSpace_=false; centerAim(); engine_.reset(); diagnostics_.reset(); simulation_.reset();
         simulation_.render(frame_); lastDetection_={}; lastResult_={}; previousTick_=triggerlab::Clock::now();
     }
     void togglePause() {
-        paused_=!paused_; holdingSpace_=false;
+        paused_=!paused_; holdingSpace_=false; mouseUp();
         lastResult_=engine_.step({false,false},triggerlab::Clock::now());
         diagnostics_.observe({false,false},lastResult_,triggerlab::Clock::now());
         SetWindowTextW(pauseControl_,paused_?L"Resume scene (P)":L"Pause scene (P)");
@@ -169,9 +194,31 @@ public:
         const auto restored=triggerlab::loadSettings(path);
         if(!restored.ok || restored.settings.scene.speed!=1.5) return false;
         command(206); if(!std::filesystem::exists(path.parent_path()/L"events.csv")) return false;
+        command(202);
+        simulation_.setConfig({}); mouseDown(480,270); tick(); tick();
+        if(engine_.shotCount()!=1 || !active()) return false;
+        mouseMove(975,270); tick(); if(active() || lastResult_.state!=triggerlab::TriggerState::Idle) return false;
+        mouseUp(); mouseMove(10,10); tick(); if(lastDetection_.found) return false;
+        onFocusLost(); if(active()) return false;
         command(202); return engine_.shotCount()==0 && diagnostics_.sampleCount()==0;
     }
-    void onFocusLost() noexcept { holdingSpace_ = false; }
+    void onFocusLost() noexcept {
+        holdingSpace_=false; aim_.release();
+        if(GetCapture()==window_) ReleaseCapture();
+    }
+    void mouseMove(int x,int y) noexcept {
+        aim_.move(x,y);
+        TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT),TME_LEAVE,window_,0}; TrackMouseEvent(&tracking);
+    }
+    void mouseDown(int x,int y) noexcept {
+        mouseMove(x,y); if(!aim_.inside()) return;
+        SetFocus(window_); aim_.press(); if(!paused_) SetCapture(window_);
+    }
+    void mouseUp() noexcept { aim_.release(); if(GetCapture()==window_) ReleaseCapture(); }
+    void mouseLeave() noexcept { aim_.leave(); }
+    void mouseCaptureLost() noexcept {aim_.release();}
+    void centerAim() noexcept {mouseUp(); aim_.center();}
+    bool active() const noexcept {return !paused_ && (holdingSpace_ || aim_.active());}
 
     void onKeyDown(WPARAM key, LPARAM lparam) {
         if (key == VK_SPACE) {
@@ -215,14 +262,16 @@ public:
 
         if(!paused_) simulation_.advance(dt);
         simulation_.render(frame_);
-        lastDetection_ = detector_.detect(frame_, frame_.width() / 2, frame_.height() / 2);
-        lastResult_ = engine_.step({holdingSpace_, lastDetection_.found}, now);
-        diagnostics_.observe({holdingSpace_,lastDetection_.found},lastResult_,now);
-        if (lastResult_.fired) simulation_.onSimulatedShot();
-        InvalidateRect(window_, nullptr, FALSE);
+        lastDetection_ = detector_.detect(frame_, aim_.x(), aim_.y());
+        lastResult_ = engine_.step({active(), lastDetection_.found}, now);
+        diagnostics_.observe({active(),lastDetection_.found},lastResult_,now);
+        if (lastResult_.fired) simulation_.onSimulatedShot(aim_.x(),aim_.y());
+        RECT scene{0,0,kFrameWidth,kFrameHeight}; InvalidateRect(window_, &scene, FALSE);
     }
 
-    void paint(HDC dc, const RECT& client) {
+    void paint(HDC screen, const RECT& client) {
+        if(!backBuffer_.ensure(screen,client.right-client.left,client.bottom-client.top)) return;
+        const HDC dc=backBuffer_.dc();
         BITMAPINFO bitmap{};
         bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bitmap.bmiHeader.biWidth = frame_.width();
@@ -235,7 +284,7 @@ public:
         RECT panel{960,0,client.right,client.bottom};
         FillRect(dc,&panel,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(225,230,238));
-        drawText(dc,976,18,L"SETTINGS / SCENE - v0.3");
+        drawText(dc,976,18,L"SETTINGS / SCENE - v0.3.1");
         const int displayWidth = std::min(960L, client.right - client.left);
         const int displayHeight = std::min(540L, client.bottom - client.top);
         if (displayWidth <= 0 || displayHeight <= 0) return;
@@ -244,8 +293,8 @@ public:
                       0, 0, frame_.width(), frame_.height(), frame_.data(), &bitmap,
                       DIB_RGB_COLORS, SRCCOPY);
 
-        const int crossX = displayWidth / 2;
-        const int crossY = displayHeight / 2;
+        const int crossX = aim_.x();
+        const int crossY = aim_.y();
         HGDIOBJ previousPen = SelectObject(dc, GetStockObject(DC_PEN));
         SetDCPenColor(dc, lastDetection_.found ? RGB(255, 225, 70) : RGB(226, 241, 247));
         const int innerGap = std::max(3, displayWidth / 280);
@@ -264,16 +313,16 @@ public:
         SetTextColor(dc, RGB(246, 246, 252));
         const int fontHeight = 18;
         const int textX = 18;
-        drawText(dc, textX, 18, L"TRIGGERLAB v0.3  |  LOCAL PRACTICE SANDBOX");
-        drawText(dc, textX, 18 + fontHeight, L"HOLD SPACE: arm  |  P: pause  |  R: reset  |  ESC: exit");
+        drawText(dc, textX, 18, L"TRIGGERLAB v0.3.1  |  LOCAL PRACTICE SANDBOX");
+        drawText(dc, textX, 18 + fontHeight, L"MOUSE: aim | HOLD LMB / SPACE: arm | RMB: center | P: pause | R: reset");
         drawText(dc, textX, 18 + fontHeight * 2,
                  L"UP/DOWN: cooldown  |  LEFT/RIGHT: detection ROI");
 
         const int textY = 18 + fontHeight * 4;
-        SetTextColor(dc, holdingSpace_ ? RGB(130, 255, 176) : RGB(240, 190, 156));
+        SetTextColor(dc, active() ? RGB(130, 255, 176) : RGB(240, 190, 156));
         drawText(dc, textX, textY,
                  L"Engine: " + std::wstring(stateLabel(lastResult_.state)) +
-                 (holdingSpace_ ? L" (holding)" : L" (inactive)"));
+                 (active() ? L" (holding)" : L" (inactive)"));
         SetTextColor(dc, RGB(235, 240, 245));
         const int coveragePercent = static_cast<int>(std::lround(lastDetection_.coverage * 100.0));
         drawText(dc, textX, textY + fontHeight,
@@ -303,10 +352,13 @@ public:
             drawText(dc, crossX + 22, crossY - 55, L"SIMULATED HIT");
         }
         SetTextColor(dc, RGB(180, 192, 202));
-        drawText(dc, textX, displayHeight - 28, L"No real mouse input | No game access | No anti-cheat interaction");
+        drawText(dc, textX, displayHeight - 28, L"Simulated shots only | Local scene | No external input");
+        BitBlt(screen,0,0,client.right-client.left,client.bottom-client.top,dc,0,0,SRCCOPY);
     }
 
 private:
+    BackBuffer backBuffer_;
+    triggerlab::AimInput aim_;
     std::filesystem::path configPath_;
     std::wstring configStatus_;
     std::array<HWND,7> edits_{};
@@ -360,9 +412,20 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         case WM_TIMER:
             if (wparam == kTimerId && app) app->tick();
             return 0;
+        case WM_MOUSEMOVE:
+            if(app) app->mouseMove(GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)); return 0;
         case WM_LBUTTONDOWN:
-            SetFocus(window);
-            return 0;
+            if(app) app->mouseDown(GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)); return 0;
+        case WM_LBUTTONUP:
+            if(app) app->mouseUp(); return 0;
+        case WM_RBUTTONDOWN:
+            if(app) app->centerAim(); return 0;
+        case WM_MOUSELEAVE:
+            if(app) app->mouseLeave(); return 0;
+        case WM_CAPTURECHANGED:
+            if(app) app->mouseCaptureLost(); return 0;
+        case WM_CANCELMODE:
+            if(app) app->onFocusLost(); return 0;
         case WM_KEYDOWN:
             if (app) app->onKeyDown(wparam, lparam);
             return 0;
@@ -410,9 +473,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         }
 
         RECT rect{0, 0, kFrameWidth+280, 640};
-        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE);
         HWND window = CreateWindowExW(0, className, L"TriggerLab - Local Practice Sandbox",
-                                      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                       rect.right - rect.left, rect.bottom - rect.top,
                                       nullptr, nullptr, instance, &app);
         if (!window) {
@@ -422,9 +485,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         if (std::wstring(commandLine)==L"--smoke-test") {
             const auto directory=std::filesystem::temp_directory_path()/ (L"triggerlab-gui-test-"+std::to_wstring(GetCurrentProcessId()));
             const bool passed=app.smokeTest(directory/L"settings.json");
-            HDC dc=GetDC(window); RECT client{}; GetClientRect(window,&client); app.paint(dc,client); ReleaseDC(window,dc);
+            HDC dc=GetDC(window); RECT client{}; GetClientRect(window,&client); app.paint(dc,client);
+            const DWORD initialResources=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS);
+            for(int i=0;i<100;++i) { RECT size{0,0,client.right+(i%2)*16,client.bottom}; app.paint(dc,size); }
+            app.paint(dc,client);
+            const bool resourcesStable=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS)==initialResources;
+            ReleaseDC(window,dc);
             DestroyWindow(window); std::filesystem::remove_all(directory);
-            return passed?0:2;
+            return passed && resourcesStable?0:2;
         }
         ShowWindow(window, showCommand);
         UpdateWindow(window);

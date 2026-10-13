@@ -5,12 +5,16 @@
 
 namespace triggerlab {
 
-void Simulation::onSimulatedShot() noexcept {
+void Simulation::onSimulatedShot(int aimX, int aimY) noexcept {
     hitFlashSeconds_=.22; hitFlashTarget_=0;
     if(config_.profile==SceneProfile::Multiple) {
-        double closest=2;
+        if(aimX<0) aimX=width_/2;
+        if(aimY<0) aimY=height_/2;
+        double closest=1e20;
         for(int i=0;i<3;++i) {
-            const double distance=std::abs(std::sin(timeSeconds_*1.05+i*2.094395102393195));
+            const double cx=width_/2+std::lround(.20*width_*std::sin(timeSeconds_*1.05+i*2.094395102393195));
+            const double cy=height_/2+std::lround(.035*height_*std::sin(timeSeconds_*.68+i*2.094395102393195));
+            const double distance=(cx-aimX)*(cx-aimX)+(cy-aimY)*(cy-aimY);
             if(distance<closest) { closest=distance; hitFlashTarget_=i; }
         }
     }
