@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(TRIGGERLAB_BUILD_TESTS "Build TriggerLab unit tests" ON)
+option(TRIGGERLAB_STATIC_RUNTIME "Bundle MSVC runtime into executables" ON)
+if(MSVC AND TRIGGERLAB_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 add_library(triggerlab_core STATIC
     src/TargetDetector.cpp

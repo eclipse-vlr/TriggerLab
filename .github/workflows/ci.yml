@@ -31,6 +31,18 @@ jobs:
             build/Release/TriggerLabCapturePreview.exe
           if-no-files-found: error
           retention-days: 14
+      - name: Package portable preview
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -BuildDir build
+      - name: Upload distribution archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: TriggerLab-portable-preview
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
 
   portable-core:
     runs-on: ubuntu-24.04

@@ -1,5 +1,24 @@
 # TriggerLab v0.3.2 — локальный FPS-тренажёр
 
+## Предварительная переносимая сборка анализатора
+
+Архив `TriggerLab-0.4.0-preview.1-windows-x64.zip` содержит анализатор, отдельный тренажёр, краткую инструкцию, условия использования и SHA-256. Это предварительная сборка: весь план v0.4 ещё не завершён. Лицензия закрытая: бесплатное личное некоммерческое использование готового приложения, без перепродажи и изменения; подробности — [LICENSE.txt](LICENSE.txt).
+
+Windows 10 1703+ / Windows 11 x64, без установки и без обязательного запуска от администратора. MSVC Runtime статически включён в exe. Сборка не подписана сертификатом издателя. Контрольные суммы проверяют целостность файлов, но не подтверждают издателя.
+
+Сборка архива:
+
+```powershell
+cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64 -DTRIGGERLAB_STATIC_RUNTIME=ON
+cmake --build build-release --config Release --parallel 2
+ctest --test-dir build-release -C Release --output-on-failure
+./scripts/package-windows.ps1 -BuildDir build-release
+```
+
+ZIP и его SHA-256 появятся в `dist/`. GitHub Actions дополнительно собирает артефакт `TriggerLab-portable-preview`. Настройки остаются в `%LOCALAPPDATA%\TriggerLab`; архив не содержит личных настроек, исходного кода или тестовых файлов. Краткая инструкция: [QUICKSTART-RU.txt](docs/QUICKSTART-RU.txt).
+
+Совместимость с Valorant/Vanguard не проверена и не заявляется. Правила Riot запрещают несанкционированные программы автоматизации, взаимодействующие с игрой: [Riot Terms of Service](https://www.riotgames.com/en/terms-of-service). Работа SendInput в обычном окне не подтверждает работу или разрешённость его применения в игре.
+
 Учебный стенд на C++20 для Windows x64. В `TriggerLab.exe` движущаяся мишень, прицел, BGRA-буфер и симулированные выстрелы работают внутри приложения. Отдельный `TriggerLabCapturePreview.exe` анализирует экран и поддерживает явно включаемый системный автоклик в выбранном окне.
 
 ## Сборка и проверка
