@@ -57,16 +57,36 @@ struct Preview {
         if(ChooseColorW(&picker)) {color.target={GetBValue(picker.rgbResult),GetGValue(picker.rgbResult),GetRValue(picker.rgbResult),255};syncColor();status=L"Цвет выбран. Нажмите «Сохранить цвет»";}
     }
     void saveColor() {if(!applyColor()) return;std::string error;status=triggerlab::saveColorProfile(colorPath,color,error)?L"Цвет сохранён / Color saved":L"Ошибка сохранения цвета / Save failed";}
+    void refreshTargetButton() {
+        if(targetWindow) {
+            DWORD process=0;GetWindowThreadProcessId(targetWindow,&process);
+            if(!IsWindow(targetWindow) || process!=targetProcess) {
+                targetWindow=nullptr;targetProcess=0;targetTitle.clear();disableClicks();notice=L"Выбранное окно закрыто";
+            } else {
+                wchar_t title[256]{};GetWindowTextW(targetWindow,title,256);
+                targetTitle=title[0]?title:L"Без названия";
+            }
+        }
+        std::wstring caption=L"Окно не выбрано\nВыбрать (3 сек.)";
+        if(targetDeadline) caption=L"Выбор окна…\nНаведите курсор (3 сек.)";
+        else if(targetWindow) {
+            auto title=targetTitle;
+            if(title.size()>25) {title.resize(24);if(title.back()>=0xD800 && title.back()<=0xDBFF) title.pop_back();title+=L"…";}
+            caption=L"Окно: "+title+L"\nСменить (3 сек.)";
+        }
+        HWND button=GetDlgItem(window,7);wchar_t previous[256]{};GetWindowTextW(button,previous,256);
+        if(caption!=previous) {SetWindowTextW(button,caption.c_str());InvalidateRect(window,nullptr,FALSE);}
+    }
     void selectTarget() {
-        disableClicks();targetWindow=nullptr;targetDeadline=GetTickCount64()+3000;SetTimer(window,2,50,nullptr);status=L"3 секунды: активируйте целевое окно и наведите курсор на него";
+        disableClicks();targetWindow=nullptr;targetDeadline=GetTickCount64()+3000;SetTimer(window,2,50,nullptr);status=L"3 секунды: активируйте целевое окно и наведите курсор на него";refreshTargetButton();
     }
     void finishTargetSelection() {
         POINT point{};if(!GetCursorPos(&point)) return;
         HWND selected=GetAncestor(WindowFromPoint(point),GA_ROOT);
-        if(!selected || selected==window || !IsWindowVisible(selected)) {status=L"Целевое окно не выбрано";return;}
+        if(!selected || selected==window || !IsWindowVisible(selected)) {status=L"Целевое окно не выбрано";refreshTargetButton();return;}
         targetWindow=selected;GetWindowThreadProcessId(selected,&targetProcess);
         wchar_t title[256]{};GetWindowTextW(selected,title,256);targetTitle=title;
-        status=L"Окно выбрано. Включите автоклик отдельно";
+        status=L"Окно выбрано. Включите автоклик отдельно";refreshTargetButton();
     }
     bool permittedAt(POINT point) const {
         DWORD process=0;if(!targetWindow || !IsWindow(targetWindow)) return false;
@@ -95,9 +115,9 @@ struct Preview {
         CreateWindowW(L"BUTTON",L"Выбрать цвет…",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,95,150,30,window,reinterpret_cast<HMENU>(4),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Пипетка (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,95,170,30,window,reinterpret_cast<HMENU>(5),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Сохранить цвет",WS_CHILD|WS_VISIBLE|WS_TABSTOP,365,95,175,30,window,reinterpret_cast<HMENU>(6),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Выбрать окно (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,135,240,30,window,reinterpret_cast<HMENU>(7),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Окно не выбрано\nВыбрать (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_MULTILINE,15,135,240,40,window,reinterpret_cast<HMENU>(7),nullptr,nullptr);
         autoControl=CreateWindowW(L"BUTTON",L"Автоклик в выбранном окне",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,270,135,350,30,window,reinterpret_cast<HMENU>(8),nullptr,nullptr);
-        syncColor();
+        syncColor();refreshTargetButton();SetTimer(window,3,500,nullptr);
     }
     void command(int id) {
         if(id==1) {if(SetTimer(window,1,33,nullptr)) {running=true;status=L"Active / Захват активен";}else status=L"Timer failed / Ошибка таймера";}
@@ -149,7 +169,16 @@ struct Preview {
         SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
         if(autoClick || SendMessageW(autoControl,BM_GETCHECK,0,0)!=BST_UNCHECKED) return false;
         command(1);if(!running) return false;command(2);
-        return !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline;
+        HWND test=CreateWindowW(L"STATIC",L"Test window title",WS_OVERLAPPED,0,0,100,100,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if(!test) return false;
+        targetWindow=test;GetWindowThreadProcessId(test,&targetProcess);refreshTargetButton();
+        wchar_t caption[256]{};GetWindowTextW(GetDlgItem(window,7),caption,256);
+        bool labels=std::wstring(caption).find(L"Test window title")!=std::wstring::npos;
+        SetWindowTextW(test,L"Renamed target");refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
+        labels=labels && std::wstring(caption).find(L"Renamed target")!=std::wstring::npos;
+        DestroyWindow(test);refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
+        labels=labels && !targetWindow && std::wstring(caption).find(L"не выбрано")!=std::wstring::npos;
+        return labels && !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline;
     }
     void paint(HDC target,RECT rect) {
         const int w=rect.right,h=rect.bottom;if(w<=0 || h<=0) return;
@@ -181,6 +210,7 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             case WM_CREATE:app->createControls();return 0;
             case WM_COMMAND:app->command(LOWORD(wp));return 0;
             case WM_TIMER:
+                if(wp==3) {app->refreshTargetButton();return 0;}
                 if(wp==2 && app->targetDeadline && GetTickCount64()>=app->targetDeadline) {app->targetDeadline=0;KillTimer(window,2);app->finishTargetSelection();app->notice=app->status;InvalidateRect(window,nullptr,FALSE);}
                 else if(wp==1) app->update();return 0;
             case WM_HOTKEY:if(wp==9) app->stop();return 0;
@@ -191,7 +221,7 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             case WM_CTLCOLORSTATIC: {HDC dc=reinterpret_cast<HDC>(wp);SetTextColor(dc,RGB(240,240,240));SetBkColor(dc,RGB(0,0,0));return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));}
             case WM_ERASEBKGND:return 1;
             case WM_PAINT: {PAINTSTRUCT paint{};HDC dc=BeginPaint(window,&paint);RECT rect{};GetClientRect(window,&rect);try {app->paint(dc,rect);} catch(...) {EndPaint(window,&paint);throw;} EndPaint(window,&paint);return 0;}
-            case WM_DESTROY:app->stop();PostQuitMessage(0);return 0;
+            case WM_DESTROY:KillTimer(window,3);app->stop();PostQuitMessage(0);return 0;
         }
     } catch(const std::exception&) {app->stop();}
     return DefWindowProcW(window,message,wp,lp);
