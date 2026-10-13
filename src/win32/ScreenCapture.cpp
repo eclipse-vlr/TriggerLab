@@ -78,7 +78,7 @@ CaptureSample ScreenCapture::captureCursor(int side) {
     const auto roi=cursorRegion(point.x,point.y,side,bounds);
     if(!roi) {CaptureSample failed; failed.status=CaptureStatus::InvalidRegion; return failed;}
     auto result=capture(*roi);
-    if(result.frame) result.cursorPixel=result.frame->at(static_cast<int>(point.x-result.region.x),static_cast<int>(point.y-result.region.y));
+    if(result.frame) {result.cursorPixel=result.frame->at(static_cast<int>(point.x-result.region.x),static_cast<int>(point.y-result.region.y));result.cursorPosition=CapturePoint{point.x,point.y};}
     return result;
 }
 }

@@ -103,10 +103,9 @@ ConfigResult loadSettings(const std::filesystem::path& path) {
         data.resize(static_cast<std::size_t>(in.gcount())); return deserializeSettings(data);
     } catch (const std::exception&) { return {{},false,"Configuration read error; defaults applied"}; }
 }
-bool saveSettings(const std::filesystem::path& path, const Settings& s, std::string& error) {
+bool writeAtomicTextFile(const std::filesystem::path& path,const std::string& data,std::string& error) {
     auto temporary=path; temporary += ".tmp";
     try {
-        const auto data=serializeSettings(s);
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
         { std::ofstream out(temporary,std::ios::binary|std::ios::trunc);
           out.write(data.data(),static_cast<std::streamsize>(data.size())); out.flush();
@@ -123,4 +122,8 @@ bool saveSettings(const std::filesystem::path& path, const Settings& s, std::str
         error=e.what(); std::error_code ignored; std::filesystem::remove(temporary,ignored); return false;
     }
 }
+bool saveSettings(const std::filesystem::path& path,const Settings& s,std::string& error) {
+    try {return writeAtomicTextFile(path,serializeSettings(s),error);}catch(const std::exception& e) {error=e.what();return false;}
+}
+
 }

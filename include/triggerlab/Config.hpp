@@ -13,5 +13,6 @@ bool validSettings(const Settings& settings) noexcept;
 std::string serializeSettings(const Settings& settings);
 ConfigResult deserializeSettings(std::string_view json);
 ConfigResult loadSettings(const std::filesystem::path& path);
+bool writeAtomicTextFile(const std::filesystem::path& path,const std::string& data,std::string& error);
 bool saveSettings(const std::filesystem::path& path, const Settings& settings, std::string& error);
 }
