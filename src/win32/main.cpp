@@ -89,7 +89,7 @@ public:
         else { configPath_ = std::filesystem::path(L"settings.json"); }
         const auto loaded = triggerlab::loadSettings(configPath_);
         engine_.setConfig(loaded.settings.engine); detector_.setConfig(loaded.settings.detector); simulation_.setConfig(loaded.settings.scene);
-        configStatus_ = std::wstring(loaded.message.begin(), loaded.message.end());
+        language_=loaded.settings.language; configStatus_=loaded.ok?L"Settings loaded":L"Cannot load settings; defaults applied";
         simulation_.render(frame_);
     }
 
@@ -98,20 +98,39 @@ public:
         const wchar_t* labels[] = {L"Cooldown ms [50..2000]", L"ROI radius [0..30]", L"Stable frames [1..20]",
             L"Coverage [0.01..1]", L"Minimum red [0..255]", L"Minimum blue [0..255]", L"Maximum green [0..255]"};
         for (int i=0; i<7; ++i) {
-            CreateWindowW(L"STATIC", labels[i], WS_CHILD|WS_VISIBLE, 976, 55+i*36, 250, 20, window_, nullptr, nullptr, nullptr);
+            labelControls_[i]=CreateWindowW(L"STATIC", labels[i], WS_CHILD|WS_VISIBLE, 976, 55+i*36, 250, 20, window_, nullptr, nullptr, nullptr);
             edits_[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,
                 976,73+i*36,240,24,window_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
         }
         CreateWindowW(L"BUTTON",L"Apply and save",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,340,240,30,window_,reinterpret_cast<HMENU>(201),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Reset statistics / scene",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,375,240,30,window_,reinterpret_cast<HMENU>(202),nullptr,nullptr);
-        CreateWindowW(L"STATIC",L"Scene / speed [0.25..3]",WS_CHILD|WS_VISIBLE,976,418,240,20,window_,nullptr,nullptr,nullptr);
+        CreateWindowW(L"STATIC",L"Scene / speed [0.25..3]",WS_CHILD|WS_VISIBLE,976,418,240,20,window_,reinterpret_cast<HMENU>(207),nullptr,nullptr);
         sceneControl_=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,976,442,240,180,window_,reinterpret_cast<HMENU>(203),nullptr,nullptr);
         for(auto label:{L"Crossing (classic)",L"Multiple targets",L"Precision (small target)"}) SendMessageW(sceneControl_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
         speedControl_=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"1",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,976,478,240,24,window_,nullptr,nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Apply scene and save",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,510,240,30,window_,reinterpret_cast<HMENU>(204),nullptr,nullptr);
         pauseControl_=CreateWindowW(L"BUTTON",L"Pause scene (P)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,550,240,30,window_,reinterpret_cast<HMENU>(205),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Export event log (CSV)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,976,590,240,30,window_,reinterpret_cast<HMENU>(206),nullptr,nullptr);
-        syncControls();
+        languageLabel_=CreateWindowW(L"STATIC",L"Language / Язык",WS_CHILD|WS_VISIBLE,976,634,240,20,window_,nullptr,nullptr,nullptr);
+        languageControl_=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,976,658,240,100,window_,reinterpret_cast<HMENU>(208),nullptr,nullptr);
+        SendMessageW(languageControl_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"English"));
+        SendMessageW(languageControl_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Русский"));
+        syncControls(); updateLanguage();
+    }
+    std::wstring tr(std::wstring_view key) const {return std::wstring(triggerlab::translate(language_,key));}
+    void updateLanguage() {
+        const wchar_t* labels[]={L"Cooldown ms [50..2000]",L"ROI radius [0..30]",L"Stable frames [1..20]",L"Coverage [0.01..1]",L"Minimum red [0..255]",L"Minimum blue [0..255]",L"Maximum green [0..255]"};
+        for(int i=0;i<7;++i) SetWindowTextW(labelControls_[i],tr(labels[i]).c_str());
+        const wchar_t* buttons[]={L"Apply and save",L"Reset statistics / scene",L"",L"Apply scene and save",paused_?L"Resume scene (P)":L"Pause scene (P)",L"Export event log (CSV)",L"Scene / speed [0.25..3]"};
+        for(int id=201;id<=207;++id) if(id!=203) SetWindowTextW(GetDlgItem(window_,id),tr(buttons[id-201]).c_str());
+        const auto selected=SendMessageW(sceneControl_,CB_GETCURSEL,0,0);
+        SendMessageW(sceneControl_,CB_RESETCONTENT,0,0);
+        for(auto label:{L"Crossing (classic)",L"Multiple targets",L"Precision (small target)"}) SendMessageW(sceneControl_,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(tr(label).c_str()));
+        SendMessageW(sceneControl_,CB_SETCURSEL,selected,0);
+        SetWindowTextW(languageLabel_,tr(L"Language / Язык").c_str());
+        SendMessageW(languageControl_,CB_SETCURSEL,static_cast<WPARAM>(language_),0);
+        SetWindowTextW(window_,tr(L"TriggerLab - Local Practice Sandbox").c_str());
+        InvalidateRect(window_,nullptr,FALSE);
     }
     void syncControls() {
         const auto e=engine_.config(); const auto d=detector_.config();
@@ -124,10 +143,17 @@ public:
     }
     void save() {
         std::string error;
-        if (triggerlab::saveSettings(configPath_,{engine_.config(),detector_.config(),simulation_.config()},error)) configStatus_=L"Settings saved";
-        else configStatus_=L"Save failed: " + std::wstring(error.begin(),error.end());
+        if (triggerlab::saveSettings(configPath_,{engine_.config(),detector_.config(),simulation_.config(),language_},error)) configStatus_=L"Settings saved";
+        else configStatus_=L"Save failed";
     }
-    void command(int id) {
+    void command(int id,int notification=BN_CLICKED) {
+        if(id==208) {
+            if(notification!=CBN_SELCHANGE) return;
+            const auto selected=SendMessageW(languageControl_,CB_GETCURSEL,0,0);
+            if(selected<0 || selected>1) return;
+            language_=static_cast<triggerlab::Language>(selected); updateLanguage(); save();
+            SetFocus(window_); InvalidateRect(window_,nullptr,FALSE); return;
+        }
         if(id==204) {
             wchar_t value[128]{}; GetWindowTextW(speedControl_,value,128);
             std::wistringstream input(value); input.imbue(std::locale::classic()); double speed=0;
@@ -164,7 +190,7 @@ public:
         paused_=!paused_; holdingSpace_=false; mouseUp();
         lastResult_=engine_.step({false,false},triggerlab::Clock::now());
         diagnostics_.observe({false,false},lastResult_,triggerlab::Clock::now());
-        SetWindowTextW(pauseControl_,paused_?L"Resume scene (P)":L"Pause scene (P)");
+        SetWindowTextW(pauseControl_,tr(paused_?L"Resume scene (P)":L"Pause scene (P)").c_str());
     }
     void exportLog() {
         try {
@@ -200,7 +226,18 @@ public:
         mouseMove(975,270); tick(); if(active() || lastResult_.state!=triggerlab::TriggerState::Idle) return false;
         mouseUp(); mouseMove(10,10); tick(); if(lastDetection_.found) return false;
         onFocusLost(); if(active()) return false;
-        command(202); return engine_.shotCount()==0 && diagnostics_.sampleCount()==0;
+        command(202);
+        const auto shots=engine_.shotCount();
+        SetWindowTextW(edits_[0],L"900");
+        for(int language:{0,1}) {
+            SendMessageW(languageControl_,CB_SETCURSEL,language,0); command(208,CBN_SELCHANGE);
+            const auto restoredLanguage=triggerlab::loadSettings(path);
+            if(!restoredLanguage.ok || static_cast<int>(restoredLanguage.settings.language)!=language || engine_.shotCount()!=shots) return false;
+            wchar_t text[128]{}; GetWindowTextW(GetDlgItem(window_,201),text,128);
+            if(std::wstring(text)!=tr(L"Apply and save")) return false;
+            GetWindowTextW(edits_[0],text,128); if(std::wstring(text)!=L"900") return false;
+        }
+        return engine_.shotCount()==0 && diagnostics_.sampleCount()==0;
     }
     void onFocusLost() noexcept {
         holdingSpace_=false; aim_.release();
@@ -284,7 +321,7 @@ public:
         RECT panel{960,0,client.right,client.bottom};
         FillRect(dc,&panel,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         SetBkMode(dc,TRANSPARENT); SetTextColor(dc,RGB(225,230,238));
-        drawText(dc,976,18,L"SETTINGS / SCENE - v0.3.1");
+        drawText(dc,976,18,tr(L"SETTINGS / SCENE - v0.3.2"));
         const int displayWidth = std::min(960L, client.right - client.left);
         const int displayHeight = std::min(540L, client.bottom - client.top);
         if (displayWidth <= 0 || displayHeight <= 0) return;
@@ -313,46 +350,46 @@ public:
         SetTextColor(dc, RGB(246, 246, 252));
         const int fontHeight = 18;
         const int textX = 18;
-        drawText(dc, textX, 18, L"TRIGGERLAB v0.3.1  |  LOCAL PRACTICE SANDBOX");
-        drawText(dc, textX, 18 + fontHeight, L"MOUSE: aim | HOLD LMB / SPACE: arm | RMB: center | P: pause | R: reset");
+        drawText(dc, textX, 18, tr(L"TRIGGERLAB v0.3.2  |  LOCAL PRACTICE SANDBOX"));
+        drawText(dc, textX, 18 + fontHeight, tr(L"MOUSE: aim | HOLD LMB / SPACE: arm | RMB: center | P: pause | R: reset"));
         drawText(dc, textX, 18 + fontHeight * 2,
-                 L"UP/DOWN: cooldown  |  LEFT/RIGHT: detection ROI");
+                 tr(L"UP/DOWN: cooldown  |  LEFT/RIGHT: detection ROI"));
 
         const int textY = 18 + fontHeight * 4;
         SetTextColor(dc, active() ? RGB(130, 255, 176) : RGB(240, 190, 156));
         drawText(dc, textX, textY,
-                 L"Engine: " + std::wstring(stateLabel(lastResult_.state)) +
-                 (active() ? L" (holding)" : L" (inactive)"));
+                 tr(L"Engine: ") + std::wstring(tr(stateLabel(lastResult_.state))) +
+                 (active() ? tr(L" (holding)") : tr(L" (inactive)")));
         SetTextColor(dc, RGB(235, 240, 245));
         const int coveragePercent = static_cast<int>(std::lround(lastDetection_.coverage * 100.0));
         drawText(dc, textX, textY + fontHeight,
-                 L"Target: " + std::wstring(lastDetection_.found ? L"YES" : L"NO") +
-                 L"  |  Coverage: " + std::to_wstring(coveragePercent) + L"%");
+                 tr(L"Target: ") + std::wstring(lastDetection_.found ? tr(L"YES") : tr(L"NO")) +
+                 tr(L"  |  Coverage: ") + std::to_wstring(coveragePercent) + tr(L"%"));
         drawText(dc, textX, textY + fontHeight * 2,
-                 L"Simulated shots: " + std::to_wstring(lastResult_.shotCount) +
-                 L"  |  Cooldown: " + std::to_wstring(engine_.config().cooldown.count()) + L"ms");
+                 tr(L"Simulated shots: ") + std::to_wstring(lastResult_.shotCount) +
+                 tr(L"  |  Cooldown: ") + std::to_wstring(engine_.config().cooldown.count()) + tr(L"ms"));
         drawText(dc, textX, textY + fontHeight * 3,
-                 L"ROI radius: " + std::to_wstring(detector_.config().roiRadius) +
-                 L"px  |  FPS: " + std::to_wstring(static_cast<int>(std::lround(fps_))));
+                 tr(L"ROI radius: ") + std::to_wstring(detector_.config().roiRadius) +
+                 tr(L"px  |  FPS: ") + std::to_wstring(static_cast<int>(std::lround(fps_))));
 
-        drawText(dc,textX,textY + fontHeight*4,L"Stable frames: " + std::to_wstring(engine_.config().stableFrames));
+        drawText(dc,textX,textY + fontHeight*4,tr(L"Stable frames: ") + std::to_wstring(engine_.config().stableFrames));
         auto metric=[](std::optional<double> value) { if(!value) return std::wstring(L"--"); return std::to_wstring(static_cast<int>(std::lround(*value))); };
-        drawText(dc,textX,textY+fontHeight*5,L"Detection to shot: P50 " + metric(diagnostics_.percentile(.50))+L" ms / P95 "+metric(diagnostics_.percentile(.95))+L" ms | Samples: "+std::to_wstring(diagnostics_.sampleCount()));
-        drawText(dc,textX,textY+fontHeight*6,std::wstring(L"Scene: ")+sceneLabel(simulation_.config().profile)+L" | Speed: "+formatNumber(simulation_.config().speed)+(paused_?L" | PAUSED":L" | RUNNING"));
-        drawText(dc,textX,textY+fontHeight*7,L"Recent events: "+std::to_wstring(diagnostics_.events().size()));
+        drawText(dc,textX,textY+fontHeight*5,tr(L"Detection to shot: P50 ") + metric(diagnostics_.percentile(.50))+tr(L" ms / P95 ")+metric(diagnostics_.percentile(.95))+tr(L" ms | Samples: ")+std::to_wstring(diagnostics_.sampleCount()));
+        drawText(dc,textX,textY+fontHeight*6,std::wstring(tr(L"Scene: "))+tr(sceneLabel(simulation_.config().profile))+tr(L" | Speed: ")+formatNumber(simulation_.config().speed)+(paused_?tr(L" | PAUSED"):tr(L" | RUNNING")));
+        drawText(dc,textX,textY+fontHeight*7,tr(L"Recent events: ")+std::to_wstring(diagnostics_.events().size()));
         int eventY=displayHeight-145;
         const auto& events=diagnostics_.events();
         for(std::size_t i=events.size()>3?events.size()-3:0;i<events.size();++i) {
             const auto& event=events[i];
-            drawText(dc,textX,eventY,L"+"+std::to_wstring(static_cast<int>(event.elapsedMs))+L"ms "+stateLabel(event.state)+(event.fired?L" SIMULATED SHOT":L"")+L" | target "+(event.targetVisible?L"YES":L"NO")); eventY+=fontHeight;
+            drawText(dc,textX,eventY,L"+"+std::to_wstring(static_cast<int>(event.elapsedMs))+tr(L"ms ")+tr(stateLabel(event.state))+(event.fired?tr(L" SIMULATED SHOT"):L"")+tr(L" | target ")+(event.targetVisible?tr(L"YES"):tr(L"NO"))); eventY+=fontHeight;
         }
-        drawText(dc,textX,displayHeight-52,configStatus_);
+        drawText(dc,textX,displayHeight-52,tr(configStatus_));
         if (simulation_.isHitFlashActive()) {
             SetTextColor(dc, RGB(123, 255, 170));
-            drawText(dc, crossX + 22, crossY - 55, L"SIMULATED HIT");
+            drawText(dc, crossX + 22, crossY - 55, tr(L"SIMULATED HIT"));
         }
         SetTextColor(dc, RGB(180, 192, 202));
-        drawText(dc, textX, displayHeight - 28, L"Simulated shots only | Local scene | No external input");
+        drawText(dc, textX, displayHeight - 28, tr(L"Simulated shots only | Local scene | No external input"));
         BitBlt(screen,0,0,client.right-client.left,client.bottom-client.top,dc,0,0,SRCCOPY);
     }
 
@@ -361,6 +398,9 @@ private:
     triggerlab::AimInput aim_;
     std::filesystem::path configPath_;
     std::wstring configStatus_;
+    triggerlab::Language language_=triggerlab::Language::Russian;
+    std::array<HWND,7> labelControls_{};
+    HWND languageLabel_=nullptr,languageControl_=nullptr;
     std::array<HWND,7> edits_{};
     HWND sceneControl_=nullptr, speedControl_=nullptr, pauseControl_=nullptr;
     triggerlab::Diagnostics diagnostics_;
@@ -394,18 +434,18 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         }
         case WM_GETMINMAXINFO: {
             auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
-            RECT minimum{0,0,kFrameWidth+280,640};
+            RECT minimum{0,0,kFrameWidth+280,710};
             AdjustWindowRect(&minimum,WS_OVERLAPPEDWINDOW,FALSE);
             limits->ptMinTrackSize={minimum.right-minimum.left,minimum.bottom-minimum.top};
             return 0;
         }
         case WM_COMMAND:
-            if (app) app->command(LOWORD(wparam));
+            if (app) app->command(LOWORD(wparam),HIWORD(wparam));
             return 0;
         case WM_CREATE:
             if (app) app->createControls();
             if (SetTimer(window, kTimerId, kTimerIntervalMs, nullptr) == 0) {
-                MessageBoxW(window, L"Could not start UI timer.", L"TriggerLab", MB_OK | MB_ICONERROR);
+                MessageBoxW(window, app->tr(L"Could not start UI timer.").c_str(), L"TriggerLab", MB_OK | MB_ICONERROR);
                 return -1;
             }
             return 0;
@@ -468,18 +508,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
         wc.lpszClassName = className;
         if (RegisterClassExW(&wc) == 0) {
-            MessageBoxW(nullptr, L"Could not register window class.", L"TriggerLab", MB_OK | MB_ICONERROR);
+            MessageBoxW(nullptr, app.tr(L"Could not register window class.").c_str(), L"TriggerLab", MB_OK | MB_ICONERROR);
             return 1;
         }
 
-        RECT rect{0, 0, kFrameWidth+280, 640};
+        RECT rect{0, 0, kFrameWidth+280, 710};
         AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE);
         HWND window = CreateWindowExW(0, className, L"TriggerLab - Local Practice Sandbox",
                                       WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                       rect.right - rect.left, rect.bottom - rect.top,
                                       nullptr, nullptr, instance, &app);
         if (!window) {
-            MessageBoxW(nullptr, L"Could not create practice window.", L"TriggerLab", MB_OK | MB_ICONERROR);
+            MessageBoxW(nullptr, app.tr(L"Could not create practice window.").c_str(), L"TriggerLab", MB_OK | MB_ICONERROR);
             return 1;
         }
         if (std::wstring(commandLine)==L"--smoke-test") {
@@ -506,7 +546,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int showCo
         }
         return status == -1 ? 1 : static_cast<int>(message.wParam);
     } catch (const std::exception&) {
-        MessageBoxW(nullptr, L"Unexpected initialization error.", L"TriggerLab", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, triggerlab::translate(triggerlab::Language::Russian,L"Unexpected initialization error.").data(), L"TriggerLab", MB_OK | MB_ICONERROR);
         return 1;
     }
 }

@@ -3,10 +3,11 @@
 #include "triggerlab/Simulation.hpp"
 #include "triggerlab/TriggerEngine.hpp"
 #include <filesystem>
+#include "triggerlab/Localization.hpp"
 #include <string>
 #include <string_view>
 namespace triggerlab {
-struct Settings { EngineConfig engine; DetectorConfig detector; SceneConfig scene; };
+struct Settings { EngineConfig engine; DetectorConfig detector; SceneConfig scene; Language language=Language::Russian; };
 struct ConfigResult { Settings settings{}; bool ok = false; std::string message; };
 bool validSettings(const Settings& settings) noexcept;
 std::string serializeSettings(const Settings& settings);
