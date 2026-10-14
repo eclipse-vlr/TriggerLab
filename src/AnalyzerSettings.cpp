@@ -1,6 +1,7 @@
 #include "triggerlab/AnalyzerSettings.hpp"
 #include "triggerlab/Config.hpp"
 #include <fstream>
+#include <algorithm>
 #include <charconv>
 #include <map>
 #include <cstdlib>
@@ -28,6 +29,21 @@ ColorMask aimColorMask(const Frame& frame,const ColorMatchConfig& color,const An
     mask.coverage=eligible?double(mask.matchingPixels)/eligible:0;
     mask.found=eligible>0 && mask.matchingPixels>0 && mask.coverage*100>=settings.minimumPercent;
     return mask;
+}
+ColorSampleCheck compareColorSamples(const Frame* target,const Frame* background,const ColorMatchConfig& color,const AnalyzerSettings& settings) {
+    ColorSampleCheck result;
+    auto compatible=[&](const Frame* frame) {return !frame || (frame->width()==settings.side && frame->height()==settings.side);};
+    if(!settings.center || !validAnalyzerSettings(settings) || !validColorConfig(color) || !compatible(target) || !compatible(background)) {result.valid=false;return result;}
+    if(target) {const auto mask=aimColorMask(*target,color,settings);result.targetCoverage=mask.coverage;result.targetFound=mask.found;}
+    if(background) {const auto mask=aimColorMask(*background,color,settings);result.backgroundCoverage=mask.coverage;result.backgroundFound=mask.found;}
+    return result;
+}
+int excludedColorPixels(const Frame& frame,const ColorMatchConfig& color,const AnalyzerSettings& settings) {
+    if(!settings.center || !validAnalyzerSettings(settings) || !validColorConfig(color) || settings.ignoreRadius==0) return 0;
+    int count=0;const int cx=frame.width()/2,cy=frame.height()/2,r=settings.ignoreRadius;
+    for(int y=std::max(0,cy-r);y<=std::min(frame.height()-1,cy+r);++y)
+        for(int x=std::max(0,cx-r);x<=std::min(frame.width()-1,cx+r);++x) if(matchesColor(frame.at(x,y),color)) ++count;
+    return count;
 }
 AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path& path) {
     try {

@@ -13,4 +13,12 @@ AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path&);
 bool saveAnalyzerSettings(const std::filesystem::path&,const AnalyzerSettings&,std::string& error);
 std::optional<Region> aimRegion(Region client,const AnalyzerSettings&) noexcept;
 ColorMask aimColorMask(const Frame&,const ColorMatchConfig&,const AnalyzerSettings&);
+struct ColorSampleCheck {
+    bool valid=true;
+    std::optional<double> targetCoverage,backgroundCoverage;
+    bool targetFound=false,backgroundFound=false;
+};
+// Read-only assessment of user-labelled samples; never authorizes input.
+ColorSampleCheck compareColorSamples(const Frame* target,const Frame* background,const ColorMatchConfig&,const AnalyzerSettings&);
+int excludedColorPixels(const Frame&,const ColorMatchConfig&,const AnalyzerSettings&);
 }

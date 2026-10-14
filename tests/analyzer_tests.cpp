@@ -7,6 +7,28 @@ void check(bool value,const char* why) {if(!value) {std::cerr<<why<<'\n';std::ex
 int main() {
     using namespace triggerlab;using namespace std::chrono_literals;
     AnalyzerSettings s;check(validAnalyzerSettings(s) && s.center && s.dryRun,"safe center defaults");
+    {
+        AnalyzerSettings qualitySettings;qualitySettings.side=5;qualitySettings.ignoreRadius=1;qualitySettings.minimumPercent=25;
+        ColorMatchConfig match;match.target={0,0,255,255};match.channelTolerance=0;
+        Frame target(5,5),background(5,5);
+        for(int y=0;y<5;++y) for(int x=0;x<5;++x) {target.at(x,y)=match.target;background.at(x,y)={0,255,0,255};}
+        auto quality=compareColorSamples(nullptr,nullptr,match,qualitySettings);
+        check(quality.valid && !quality.targetCoverage && !quality.backgroundCoverage,"missing samples are not a successful calibration");
+        quality=compareColorSamples(&target,nullptr,match,qualitySettings);check(quality.targetFound && !quality.backgroundCoverage,"partial target sample");
+        quality=compareColorSamples(&target,&background,match,qualitySettings);
+        check(quality.targetFound && !quality.backgroundFound && *quality.targetCoverage==1 && *quality.backgroundCoverage==0,"samples distinguish target from background");
+        match.channelTolerance=255;quality=compareColorSamples(&target,&background,match,qualitySettings);check(quality.backgroundFound,"broad tolerance warns about background");
+        match.channelTolerance=0;target=background;target.at(0,0)=match.target;
+        quality=compareColorSamples(&target,&background,match,qualitySettings);check(!quality.targetFound && *quality.targetCoverage==1./16,"excluded center not in coverage denominator");
+        qualitySettings.minimumPercent=100;check(!compareColorSamples(&target,&background,match,qualitySettings).targetFound,"high threshold rejects small target");
+        target=background;target.at(2,2)=match.target;check(excludedColorPixels(target,match,qualitySettings)==1 && !compareColorSamples(&target,&background,match,qualitySettings).targetFound,"color only in crosshair is ignored");
+        qualitySettings.ignoreRadius=0;check(excludedColorPixels(target,match,qualitySettings)==0,"zero exclusion");
+        qualitySettings.side=7;check(!compareColorSamples(&target,&background,match,qualitySettings).valid,"ROI changes require new samples");
+        qualitySettings.side=5;qualitySettings.center=false;check(!compareColorSamples(&target,&background,match,qualitySettings).valid,"cursor mode is not ROI calibration");
+        qualitySettings.center=true;match.channelTolerance=-1;check(!compareColorSamples(&target,&background,match,qualitySettings).valid,"invalid color rejected");
+        match.channelTolerance=0;match.space=ColorSpace::HSV;for(int y=0;y<5;++y) for(int x=0;x<5;++x) target.at(x,y)=match.target;
+        quality=compareColorSamples(&target,&background,match,qualitySettings);check(quality.valid && quality.targetFound && !quality.backgroundFound,"HSV samples supported");
+    }
     auto roi=aimRegion({-1920,20,1280,720},s);
     check(roi && roi->x==-1295 && roi->y==365 && roi->width==31,"client center, negative monitor origin");
     s.offsetX=30;s.offsetY=-20;roi=aimRegion({0,0,1280,720},s);
