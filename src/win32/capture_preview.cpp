@@ -55,7 +55,7 @@ struct Preview {
     triggerlab::HoverClickGate gate;
     std::uint64_t clickCount=0;
     std::wstring clickStatus=L"Выключен";
-    ULONGLONG pickDeadline=0,targetDeadline=0;
+    ULONGLONG pickDeadline=0,targetDeadline=0,aimPickDeadline=0;
     std::filesystem::path colorPath;
     std::optional<triggerlab::Frame> importedImage;
     Preview() {
@@ -129,9 +129,37 @@ struct Preview {
     }
     void disableClicks() {finishClick(false);UnregisterHotKey(window,9);autoClick=false;gate.reset();clickStatus=L"Выключен";if(autoControl) SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);}
     void cancelSelection() {
-        pickDeadline=targetDeadline=0;KillTimer(window,2);
+        pickDeadline=targetDeadline=aimPickDeadline=0;KillTimer(window,2);
         if(!autoClick) UnregisterHotKey(window,9);
         SetWindowTextW(GetDlgItem(window,5),L"Пипетка (3 сек.)");refreshTargetButton();
+        SetWindowTextW(GetDlgItem(window,20),L"Цвет из области прицела (3 сек.)");
+    }
+    void beginAimSelection() {
+        cancelSelection();disableClicks();
+        if(!settings.center || !clientBounds()) {status=L"Выберите окно и режим «Вокруг прицела окна»";return;}
+        if(!RegisterHotKey(window,9,MOD_NOREPEAT,VK_F9)) {status=L"F9 занят: снимок не начат";return;}
+        if(!SetTimer(window,2,100,nullptr)) {UnregisterHotKey(window,9);status=L"Ошибка таймера: снимок не начат";return;}
+        aimPickDeadline=GetTickCount64()+3000;
+        status=L"За 3 сек. активируйте тренировку и наведите прицел на мишень; F9 — отмена";
+    }
+    void finishAimSelection() {
+        cancelSelection();disableClicks();
+        const auto bounds=clientBounds();
+        const auto roi=bounds?triggerlab::aimRegion(*bounds,settings):std::optional<triggerlab::Region>{};
+        if(!roi || !permittedAt({static_cast<LONG>(roi->x+roi->width/2),static_cast<LONG>(roi->y+roi->height/2)})) {
+            status=notice=L"Снимок отменён: область недоступна или тренажёр не активен";return;
+        }
+        auto fresh=capture.capture(*roi);
+        const auto currentBounds=clientBounds();
+        if(!fresh.frame || fresh.allBlack || !currentBounds || currentBounds->x!=bounds->x || currentBounds->y!=bounds->y || currentBounds->width!=bounds->width || currentBounds->height!=bounds->height || !permittedAt({static_cast<LONG>(roi->x+roi->width/2),static_cast<LONG>(roi->y+roi->height/2)}) || fresh.region.x!=roi->x || fresh.region.y!=roi->y || fresh.region.width!=roi->width || fresh.region.height!=roi->height) {
+            status=notice=L"Снимок недоступен; прежний цвет сохранён";return;
+        }
+        // Freeze a fresh image before the modal steals focus or timer messages arrive.
+        running=false;KillTimer(window,1);sample={};mask={};analysisPoint.reset();capture.reset();
+        const auto selected=triggerlab::showImagePalette(window,*fresh.frame);
+        if(selected) {color.target=selected->color;color.space=triggerlab::ColorSpace::RGB;syncColor();status=L"Цвет мишени выбран. Сохраните цвет и начните проверку без кликов";}
+        else status=L"Выбор отменён; прежний цвет сохранён";
+        notice=status;
     }
     bool applyColor() {
         cancelSelection();disableClicks();
@@ -217,6 +245,11 @@ struct Preview {
         selectionTick(GetTickCount64());
     }
     void selectionTick(ULONGLONG now) {
+        if(aimPickDeadline && now>=aimPickDeadline) {finishAimSelection();InvalidateRect(window,nullptr,FALSE);return;}
+        if(aimPickDeadline) {
+            const auto caption=L"Снимок прицела: "+std::to_wstring((aimPickDeadline-now+999)/1000)+L" сек.";
+            SetWindowTextW(GetDlgItem(window,20),caption.c_str());
+        }
         if(pickDeadline && now>=pickDeadline) {
             cancelSelection();update(true);return;
         }
@@ -315,6 +348,7 @@ struct Preview {
         }
         CreateWindowW(L"BUTTON",L"Сохранить",WS_CHILD|WS_VISIBLE|WS_TABSTOP,895,200,100,30,window,reinterpret_cast<HMENU>(17),nullptr,nullptr);
         CreateWindowW(L"STATIC",L"ROI 5..101; игнор < ROI/2; порог 1..100%; сдвиги −2000..2000; задержка 1..2000; интервал 50..2000",WS_CHILD|WS_VISIBLE,20,240,980,25,window,nullptr,nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Цвет из области прицела (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,620,775,345,28,window,reinterpret_cast<HMENU>(20),nullptr,nullptr);
         syncColor();syncSettings();refreshTargetButton();SetTimer(window,3,500,nullptr);
     }
     void command(int id,int notification=BN_CLICKED) {
@@ -329,6 +363,7 @@ struct Preview {
         else if(id==17) applySettings();
         else if(id==18) findTrainer(L"kovaak");
         else if(id==19) findTrainer(L"aimlab");
+        else if(id==20) beginAimSelection();
         else if(id==15 || id==16) {
             if(id==15 && notification!=CBN_SELCHANGE) return;
             cancelSelection();disableClicks();settings.center=SendMessageW(modeControl,CB_GETCURSEL,0,0)==0;settings.dryRun=SendMessageW(dryControl,BM_GETCHECK,0,0)==BST_CHECKED;
@@ -479,13 +514,22 @@ struct Preview {
         HWND test=CreateWindowW(L"STATIC",L"Test window title",WS_OVERLAPPED,0,0,100,100,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
         if(!test) return false;
         targetWindow=test;GetWindowThreadProcessId(test,&targetProcess);refreshTargetButton();
+        const auto previousColor=color.target;
+        command(20);
+        if(!aimPickDeadline || autoClick) {DestroyWindow(test);return false;}
+        cancelSelection();
+        if(aimPickDeadline || color.target.red!=previousColor.red || color.target.green!=previousColor.green || color.target.blue!=previousColor.blue) {DestroyWindow(test);return false;}
+        settings.center=false;command(20);
+        if(aimPickDeadline) {DestroyWindow(test);return false;}
+        settings.center=true;
         wchar_t caption[256]{};GetWindowTextW(GetDlgItem(window,7),caption,256);
         bool labels=std::wstring(caption).find(L"Test window title")!=std::wstring::npos;
         SetWindowTextW(test,L"Renamed target");refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
         labels=labels && std::wstring(caption).find(L"Renamed target")!=std::wstring::npos;
         DestroyWindow(test);refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
         labels=labels && !targetWindow && std::wstring(caption).find(L"не выбрано")!=std::wstring::npos;
-        return labels && !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline;
+        command(20); // A closed target cannot start a delayed snapshot.
+        return labels && !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline && !aimPickDeadline;
     }
     void paint(HDC target,RECT rect) {
         const int w=rect.right,h=rect.bottom;if(w<=0 || h<=0) return;

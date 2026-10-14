@@ -1,7 +1,7 @@
 param(
     [string]$BuildDir = 'build-release',
     [string]$OutputDir = 'dist',
-    [string]$Version = '0.4.0-preview.2'
+    [string]$Version = '0.4.0-preview.3'
 )
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Invalid version' }
