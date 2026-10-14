@@ -16,12 +16,6 @@
 #include <string>
 #include <optional>
 namespace {
-struct BasicColor {const wchar_t* name;triggerlab::Pixel pixel;};
-constexpr std::array<BasicColor,3> basicColors{{
-    {L"Красный",{0,0,255,255}},
-    {L"Фиолетовый",{255,0,255,255}},
-    {L"Жёлтый",{0,255,255,255}}
-}};
 struct PaintSurface {
     HDC dc=nullptr;HBITMAP bitmap=nullptr;HGDIOBJ previous=nullptr;
     PaintSurface(HDC target,int w,int h) {
@@ -33,6 +27,9 @@ struct PaintSurface {
     bool valid() const noexcept {return dc && bitmap && previous && previous!=HGDI_ERROR;}
 };
 struct Preview {
+    HFONT uiFont=nullptr,titleFont=nullptr,headingFont=nullptr;
+    HBRUSH cardBrush=CreateSolidBrush(RGB(255,255,255));
+    ~Preview() {if(uiFont) DeleteObject(uiFont);if(titleFont) DeleteObject(titleFont);if(headingFont) DeleteObject(headingFont);if(cardBrush) DeleteObject(cardBrush);}
     triggerlab::ScreenCapture capture;
     triggerlab::CaptureSample sample;
     triggerlab::ColorMask mask;
@@ -132,7 +129,7 @@ struct Preview {
         pickDeadline=targetDeadline=aimPickDeadline=0;KillTimer(window,2);
         if(!autoClick) UnregisterHotKey(window,9);
         SetWindowTextW(GetDlgItem(window,5),L"Пипетка (3 сек.)");refreshTargetButton();
-        SetWindowTextW(GetDlgItem(window,20),L"Цвет из области прицела (3 сек.)");
+        SetWindowTextW(GetDlgItem(window,20),L"Цвет из прицела (3 сек.)");
     }
     void beginAimSelection() {
         cancelSelection();disableClicks();
@@ -173,11 +170,10 @@ struct Preview {
     }
     void chooseColor() {
         cancelSelection();disableClicks();COLORREF custom[16]{};CHOOSECOLORW picker{};picker.lStructSize=sizeof(picker);picker.hwndOwner=window;
-        for(std::size_t i=0;i<basicColors.size();++i) {const auto p=basicColors[i].pixel;custom[i]=RGB(p.red,p.green,p.blue);}
         picker.rgbResult=RGB(color.target.red,color.target.green,color.target.blue);picker.lpCustColors=custom;picker.Flags=CC_FULLOPEN|CC_RGBINIT;
         if(ChooseColorW(&picker)) {color.target={GetBValue(picker.rgbResult),GetGValue(picker.rgbResult),GetRValue(picker.rgbResult),255};color.space=triggerlab::ColorSpace::RGB;syncColor();status=L"Цвет выбран. Нажмите «Сохранить цвет»";}
     }
-    void saveColor() {if(!applyColor()) return;std::string error;status=triggerlab::saveColorProfile(colorPath,color,error)?L"Цвет сохранён / Color saved":L"Ошибка сохранения цвета / Save failed";}
+    void saveColor() {if(!applyColor()) return;std::string error;status=triggerlab::saveColorProfile(colorPath,color,error)?L"Цвет сохранён":L"Не удалось сохранить цвет";}
     bool importImage(const std::filesystem::path& path,bool edit=false) {
         cancelSelection();disableClicks();
         auto loaded=triggerlab::loadImagePixels(path);
@@ -315,44 +311,43 @@ struct Preview {
         return false;
     }
     void createControls() {
-        CreateWindowW(L"BUTTON",L"Start / Начать",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,15,150,30,window,reinterpret_cast<HMENU>(1),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Stop / Остановить",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,15,170,30,window,reinterpret_cast<HMENU>(2),nullptr,nullptr);
-        for(int i=0;i<3;++i) CreateWindowW(L"BUTTON",basicColors[i].name,WS_CHILD|WS_VISIBLE|WS_TABSTOP,
-            365+i*105,15,100,30,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(11+i)),nullptr,nullptr);
-        const wchar_t* labels[]={L"R",L"G",L"B",L"Допуск"};
-        for(int i=0;i<4;++i) {CreateWindowW(L"STATIC",labels[i],WS_CHILD|WS_VISIBLE,20+i*110,280,90,20,window,nullptr,nullptr,nullptr);colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,20+i*110,302,85,26,window,nullptr,nullptr,nullptr);}
-        CreateWindowW(L"BUTTON",L"Применить RGB",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,55,160,28,window,reinterpret_cast<HMENU>(3),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Выбрать цвет…",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,95,150,30,window,reinterpret_cast<HMENU>(4),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Пипетка (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,95,170,30,window,reinterpret_cast<HMENU>(5),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Сохранить цвет",WS_CHILD|WS_VISIBLE|WS_TABSTOP,365,95,175,30,window,reinterpret_cast<HMENU>(6),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Из файла…",WS_CHILD|WS_VISIBLE|WS_TABSTOP,550,95,120,30,window,reinterpret_cast<HMENU>(10),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Палитра / область",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,236,185,28,window,reinterpret_cast<HMENU>(14),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Окно не выбрано\nВыбрать (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_MULTILINE,15,135,240,40,window,reinterpret_cast<HMENU>(7),nullptr,nullptr);
-        autoControl=CreateWindowW(L"BUTTON",L"Автоклик в выбранном окне",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,270,135,350,30,window,reinterpret_cast<HMENU>(8),nullptr,nullptr);
-        auto move=[&](int id,int x,int y,int width,int height) {SetWindowPos(GetDlgItem(window,id),nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE);};
-        move(7,20,55,300,48);move(1,615,55,155,42);move(2,785,55,190,42);
-        move(8,640,125,340,30);SetWindowTextW(autoControl,L"Включить триггер (F9: остановить)");
-        move(3,440,302,75,28);SetWindowTextW(GetDlgItem(window,3),L"Применить");
-        for(int i=0;i<3;++i) move(11+i,520+i*155,302,145,28);
-        move(4,20,351,150,32);move(5,180,351,170,32);move(6,365,351,175,32);move(10,550,351,160,32);move(14,730,351,245,32);
-        CreateWindowW(L"STATIC",L"TriggerLab — Kovaak’s / Aimlabs | пользовательские тренировки",WS_CHILD|WS_VISIBLE,20,16,960,25,window,nullptr,nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Kovaak’s",WS_CHILD|WS_VISIBLE|WS_TABSTOP,335,55,125,42,window,reinterpret_cast<HMENU>(18),nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Aimlabs",WS_CHILD|WS_VISIBLE|WS_TABSTOP,475,55,125,42,window,reinterpret_cast<HMENU>(19),nullptr,nullptr);
-        modeControl=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,20,125,260,150,window,reinterpret_cast<HMENU>(15),nullptr,nullptr);
-        SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Вокруг прицела окна"));SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Под системным курсором"));
-        dryControl=CreateWindowW(L"BUTTON",L"Проверка без кликов",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,300,125,310,30,window,reinterpret_cast<HMENU>(16),nullptr,nullptr);
-        const wchar_t* settingLabels[]={L"ROI: нечётный",L"Игнор прицела",L"Порог, %",L"Сдвиг X",L"Сдвиг Y",L"Задержка, мс",L"Интервал, мс",L"Нажатие, мс"};
+        auto font=[](int size,int weight) {return CreateFontW(-size,0,0,0,weight,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");};
+        uiFont=font(16,FW_NORMAL);titleFont=font(30,FW_SEMIBOLD);headingFont=font(18,FW_SEMIBOLD);
+        auto button=[&](int id,const wchar_t* label,int x,int y,int w,int h=36) {
+            return CreateWindowW(L"BUTTON",label,WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW,x,y,w,h,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),nullptr,nullptr);
+        };
+        auto label=[&](const wchar_t* text,int x,int y,int width) {CreateWindowW(L"STATIC",text,WS_CHILD|WS_VISIBLE,x,y,width,22,window,nullptr,nullptr,nullptr);};
+        button(7,L"Выбрать окно (3 сек.)",40,130,260,58);
+        button(18,L"Kovaak’s",316,130,135);button(19,L"Aimlabs",316,174,135,30);
+        modeControl=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,40,210,410,140,window,reinterpret_cast<HMENU>(15),nullptr,nullptr);
+        SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Обнаружение вокруг прицела"));
+        SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Обнаружение под курсором"));
+        button(1,L"Начать захват",548,130,250,42);button(2,L"Остановить · F9",812,130,250,42);
+        dryControl=CreateWindowW(L"BUTTON",L"Проверять без кликов",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,548,190,235,28,window,reinterpret_cast<HMENU>(16),nullptr,nullptr);
+        autoControl=CreateWindowW(L"BUTTON",L"Включить триггер",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,812,190,250,28,window,reinterpret_cast<HMENU>(8),nullptr,nullptr);
+        const wchar_t* settingsLabels[]={L"Область, px",L"Исключить центр",L"Порог, %",L"Сдвиг X, px",L"Сдвиг Y, px",L"Задержка, мс",L"Интервал, мс",L"Нажатие, мс"};
         for(int i=0;i<8;++i) {
-            CreateWindowW(L"STATIC",settingLabels[i],WS_CHILD|WS_VISIBLE,20+i*110,177,108,20,window,nullptr,nullptr,nullptr);
-            settingEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP,20+i*110,202,95,26,window,nullptr,nullptr,nullptr);
+            label(settingsLabels[i],40+i*128,300,124);
+            settingEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,40+i*128,326,112,30,window,nullptr,nullptr,nullptr);
         }
-        CreateWindowW(L"BUTTON",L"Сохранить",WS_CHILD|WS_VISIBLE|WS_TABSTOP,895,200,100,30,window,reinterpret_cast<HMENU>(17),nullptr,nullptr);
-        CreateWindowW(L"STATIC",L"ROI 5..101; игнор < ROI/2; порог 1..100%; сдвиги −2000..2000; задержка 1..2000; интервал 50..2000",WS_CHILD|WS_VISIBLE,20,240,980,25,window,nullptr,nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Цвет из области прицела (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,620,775,345,28,window,reinterpret_cast<HMENU>(20),nullptr,nullptr);
+        label(L"Область 5–101 px, нечётная. Исключите перекрестие; порог задаёт долю нужного цвета.",40,368,820);
+        button(17,L"Сохранить",938,365,124,30);
+        const wchar_t* colors[]={L"Красный · R",L"Зелёный · G",L"Синий · B",L"Допуск"};
+        for(int i=0;i<4;++i) {
+            label(colors[i],40+i*110,457,104);
+            colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,40+i*110,482,96,30,window,nullptr,nullptr,nullptr);
+        }
+        button(3,L"Применить",482,482,120,30);button(6,L"Сохранить цвет",618,482,160,30);
+        button(20,L"Цвет из прицела (3 сек.)",40,530,240);
+        button(5,L"Пипетка (3 сек.)",294,530,174);
+        button(4,L"Выбрать цвет…",482,530,166);
+        button(10,L"Из файла…",662,530,152);
+        button(14,L"Палитра / область",828,530,234);
+        EnumChildWindows(window,[](HWND child,LPARAM f)->BOOL {SendMessageW(child,WM_SETFONT,static_cast<WPARAM>(f),TRUE);return TRUE;},reinterpret_cast<LPARAM>(uiFont));
         syncColor();syncSettings();refreshTargetButton();SetTimer(window,3,500,nullptr);
     }
     void command(int id,int notification=BN_CLICKED) {
-        if(id==1) {if(SetTimer(window,1,10,nullptr)) {running=true;status=L"Active / Захват активен";}else status=L"Timer failed / Ошибка таймера";}
+        if(id==1) {if(SetTimer(window,1,10,nullptr)) {running=true;status=L"Захват активен";}else status=L"Не удалось начать захват";}
         else if(id==2) stop();
         else if(id==3) {if(applyColor()) status=L"RGB применён; автоклик выключен";}
         else if(id==4) chooseColor();
@@ -370,11 +365,6 @@ struct Preview {
             sample={};mask={};analysisPoint.reset();std::string error;
             status=triggerlab::saveAnalyzerSettings(settingsPath,settings,error)?L"Режим сохранён; включите триггер отдельно":L"Режим изменён; сохранение не удалось";
         }
-        else if(id>=11 && id<=13) {
-            cancelSelection();disableClicks();color.target=basicColors[id-11].pixel;color.space=triggerlab::ColorSpace::RGB;syncColor();
-            mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
-            status=std::wstring(basicColors[id-11].name)+L": основной цвет выбран. Нажмите «Сохранить цвет»";
-        }
         else if(id==10) {chooseImage();SetFocus(window);InvalidateRect(window,nullptr,FALSE);return;}
         else if(id==8) {cancelSelection();if(!running || !targetWindow || !IsWindow(targetWindow)) {disableClicks();status=L"Сначала включите захват и выберите окно";}else {autoClick=SendMessageW(autoControl,BM_GETCHECK,0,0)==BST_CHECKED;gate.reset();if(autoClick && !RegisterHotKey(window,9,MOD_NOREPEAT,VK_F9)) {disableClicks();status=L"F9 занят: автоклик не включён";notice=status;InvalidateRect(window,nullptr,FALSE);return;}if(!autoClick) UnregisterHotKey(window,9);status=autoClick?L"Автоклик включён только в выбранном окне":L"Автоклик выключен";}}
         else return;
@@ -389,8 +379,8 @@ struct Preview {
         notice=status;InvalidateRect(window,nullptr,FALSE);
     }
     std::wstring notice;
-    std::wstring status=L"Stopped / Остановлено";
-    void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};status=L"Stopped / Остановлено";notice=status;InvalidateRect(window,nullptr,FALSE);}
+    std::wstring status=L"Захват остановлен";
+    void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};status=L"Захват остановлен";notice=status;InvalidateRect(window,nullptr,FALSE);}
     void update(bool pick=false) {
         if(!running && !pick) return;
         if(syntheticDown) {
@@ -465,14 +455,6 @@ struct Preview {
         SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
         if(autoClick || SendMessageW(autoControl,BM_GETCHECK,0,0)!=BST_UNCHECKED) return false;
         command(1);if(!running) return false;command(2);
-        for(int i=0;i<3;++i) {
-            pickDeadline=GetTickCount64()+3000;command(11+i);
-            const auto expected=basicColors[i].pixel;
-            if(color.target.red!=expected.red || color.target.green!=expected.green || color.target.blue!=expected.blue ||
-               color.space!=triggerlab::ColorSpace::RGB || pickDeadline || autoClick) return false;
-            command(6);const auto saved=triggerlab::loadColorProfile(path);
-            if(!saved.ok || saved.color.target.red!=expected.red || saved.color.target.green!=expected.green || saved.color.target.blue!=expected.blue) return false;
-        }
         // Exercise one-shot sampling with a known pixel, independently of Start
         // and of the desktop content / user's cursor. No OS input is sent.
         triggerlab::CaptureSample pixel;
@@ -531,31 +513,66 @@ struct Preview {
         command(20); // A closed target cannot start a delayed snapshot.
         return labels && !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline && !aimPickDeadline;
     }
+    void drawButton(const DRAWITEMSTRUCT& item) {
+        const bool primary=item.CtlID==1 || item.CtlID==20;
+        const bool stop=item.CtlID==2;
+        const bool pressed=(item.itemState&ODS_SELECTED)!=0;
+        COLORREF fill=primary?(pressed?RGB(29,78,216):RGB(37,99,235)):stop?RGB(254,242,242):pressed?RGB(219,234,254):RGB(241,245,249);
+        SetDCBrushColor(item.hDC,fill);SetDCPenColor(item.hDC,primary?fill:stop?RGB(254,202,202):RGB(226,232,240));
+        auto oldBrush=SelectObject(item.hDC,GetStockObject(DC_BRUSH));auto oldPen=SelectObject(item.hDC,GetStockObject(DC_PEN));
+        RoundRect(item.hDC,item.rcItem.left,item.rcItem.top,item.rcItem.right,item.rcItem.bottom,10,10);
+        wchar_t caption[512]{};GetWindowTextW(item.hwndItem,caption,512);SetBkMode(item.hDC,TRANSPARENT);
+        SetTextColor(item.hDC,primary?RGB(255,255,255):stop?RGB(185,28,28):RGB(30,41,59));
+        auto oldFont=SelectObject(item.hDC,uiFont);RECT text=item.rcItem;InflateRect(&text,-8,-4);
+        DrawTextW(item.hDC,caption,-1,&text,DT_CENTER|DT_VCENTER|DT_WORDBREAK);
+        if(item.itemState&ODS_FOCUS) {RECT focus=item.rcItem;InflateRect(&focus,-4,-4);DrawFocusRect(item.hDC,&focus);}
+        SelectObject(item.hDC,oldFont);SelectObject(item.hDC,oldBrush);SelectObject(item.hDC,oldPen);
+    }
     void paint(HDC target,RECT rect) {
         const int w=rect.right,h=rect.bottom;if(w<=0 || h<=0) return;
         if(!backBuffer || bufferWidth!=w || bufferHeight!=h) {backBuffer=std::make_unique<PaintSurface>(target,w,h);bufferWidth=w;bufferHeight=h;}
         if(!backBuffer->valid()) return;HDC dc=backBuffer->dc;
-        FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(235,235,235));
-        auto text=[&](int y,const std::wstring& line) {TextOutW(dc,15,y,line.c_str(),static_cast<int>(line.size()));};
-        text(395,status);text(425,clickStatus);
-        text(455,L"Триггер: "+std::wstring(autoClick?L"ВКЛ":L"ВЫКЛ")+L" | Отправлено: "+std::to_wstring(clickCount)+L" | Проверок без кликов: "+std::to_wstring(diagnosticCount));
-        text(485,L"Окно: "+(targetWindow?targetTitle.substr(0,80):L"не выбрано"));
+        SetDCBrushColor(dc,RGB(242,246,252));FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));SetBkMode(dc,TRANSPARENT);
+        auto oldFont=SelectObject(dc,uiFont);
+        auto line=[&](int x,int y,const std::wstring& text,COLORREF color=RGB(100,116,139),HFONT font=nullptr) {
+            SelectObject(dc,font?font:uiFont);SetTextColor(dc,color);TextOutW(dc,x,y,text.c_str(),static_cast<int>(text.size()));
+        };
+        auto wrapped=[&](RECT area,const std::wstring& text,COLORREF color) {SelectObject(dc,uiFont);SetTextColor(dc,color);DrawTextW(dc,text.c_str(),static_cast<int>(text.size()),&area,DT_LEFT|DT_WORDBREAK|DT_END_ELLIPSIS);};
+        auto card=[&](int left,int top,int right,int bottom) {
+            auto b=SelectObject(dc,GetStockObject(DC_BRUSH));auto p=SelectObject(dc,GetStockObject(DC_PEN));
+            SetDCBrushColor(dc,RGB(255,255,255));SetDCPenColor(dc,RGB(226,232,240));RoundRect(dc,left,top,right,bottom,16,16);SelectObject(dc,b);SelectObject(dc,p);
+        };
+        line(24,14,L"TriggerLab",RGB(15,23,42),titleFont);
+        line(210,26,L"Настройте цвет мишени · проверьте обнаружение · включите триггер");
+        card(20,84,488,242);card(508,84,1082,242);card(20,260,1082,406);card(20,424,1082,584);
+        line(40,100,L"1. Окно и режим обнаружения",RGB(30,41,59),headingFont);
+        line(548,100,L"3. Проверка и запуск",RGB(30,41,59),headingFont);
+        line(40,276,L"Область и время срабатывания",RGB(30,41,59),headingFont);
+        line(40,436,L"2. Цвет мишени",RGB(30,41,59),headingFont);
+        line(800,442,L"Текущий цвет");
+        HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{800,482,1062,512};FillRect(dc,&patch,swatch);DeleteObject(swatch);
+        card(20,602,360,882);card(380,602,720,882);card(740,602,1082,882);
+        line(40,620,L"Область прицела",RGB(30,41,59),headingFont);line(400,620,L"Совпадения цвета",RGB(30,41,59),headingFont);
+        line(760,620,L"Состояние",RGB(30,41,59),headingFont);
+        RECT image{40,652,340,852},maskRect{400,652,700,852};SetDCBrushColor(dc,RGB(248,250,252));FillRect(dc,&image,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));FillRect(dc,&maskRect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         if(sample.frame) {
             BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=sample.frame->width();info.bmiHeader.biHeight=-sample.frame->height();info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
-            StretchDIBits(dc,20,530,260,260,0,0,sample.frame->width(),sample.frame->height(),sample.frame->data(),&info,DIB_RGB_COLORS,SRCCOPY);
+            const int side=200;const int x=90,mx=450;
+            StretchDIBits(dc,x,652,side,side,0,0,sample.frame->width(),sample.frame->height(),sample.frame->data(),&info,DIB_RGB_COLORS,SRCCOPY);
             triggerlab::Frame maskFrame(sample.frame->width(),sample.frame->height());
             for(std::size_t i=0;i<mask.pixels.size();++i) {auto value=mask.pixels[i];maskFrame.data()[i]={value,value,value,255};}
-            StretchDIBits(dc,315,530,260,260,0,0,maskFrame.width(),maskFrame.height(),maskFrame.data(),&info,DIB_RGB_COLORS,SRCCOPY);
-        }
-        text(510,L"Снимок ROI                         Маска цвета (перекрестие исключено)");
-        auto sideText=[&](int y,const std::wstring& s) {TextOutW(dc,620,y,s.c_str(),static_cast<int>(s.size()));};
-        sideText(660,std::wstring(color.space==triggerlab::ColorSpace::RGB?L"RGB":L"HSV")+L" | "+std::to_wstring(color.target.red)+L", "+std::to_wstring(color.target.green)+L", "+std::to_wstring(color.target.blue));
-        sideText(690,L"Совпадение: "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"% | Порог: "+std::to_wstring(settings.minimumPercent)+L"%");
-        sideText(720,settings.dryRun?L"Режим: проверка без кликов":L"Режим: реальные клики");
-        sideText(750,L"C: пипетка; H: RGB/HSV; Esc / F9: Stop");
-        text(805,notice);
-        HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{620,530,965,640};FillRect(dc,&patch,swatch);DeleteObject(swatch);
-        BitBlt(target,0,0,w,h,dc,0,0,SRCCOPY);
+            StretchDIBits(dc,mx,652,side,side,0,0,maskFrame.width(),maskFrame.height(),maskFrame.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+        } else {wrapped({65,720,320,780},L"Начните захват и активируйте выбранное окно",RGB(100,116,139));wrapped({420,720,685,780},L"Белым показан найденный цвет",RGB(100,116,139));}
+        wrapped({760,654,1062,699},running?status:L"Захват остановлен",running?RGB(37,99,235):RGB(100,116,139));
+        line(760,710,autoClick?L"Триггер включён":L"Триггер выключен",autoClick?RGB(22,163,74):RGB(100,116,139));
+        wrapped({760,740,1062,787},clickStatus,RGB(30,41,59));
+        line(760,798,L"Клики: "+std::to_wstring(clickCount)+L"   Проверки: "+std::to_wstring(diagnosticCount));
+        line(760,828,L"Найдено: "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"%  /  порог "+std::to_wstring(settings.minimumPercent)+L"%");
+        line(40,858,settings.center?L"Снимок вокруг центра окна":L"Снимок под курсором");
+        line(400,858,settings.center?L"Перекрестие исключено":L"Проверка пикселя курсора");
+        wrapped({24,894,825,932},notice,RGB(100,116,139));
+        line(860,894,L"F9 / Esc — остановить");
+        SelectObject(dc,oldFont);BitBlt(target,0,0,w,h,dc,0,0,SRCCOPY);
     }
 };
 LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
@@ -575,7 +592,11 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
                 if(wp==VK_ESCAPE) app->stop();
                 else if(wp=='C') app->update(true);
                 else if(wp=='H' && !(lp & (1LL<<30))) {app->cancelSelection();app->disableClicks();app->color.space=app->color.space==triggerlab::ColorSpace::RGB?triggerlab::ColorSpace::HSV:triggerlab::ColorSpace::RGB;app->update();InvalidateRect(window,nullptr,FALSE);}return 0;
-            case WM_CTLCOLORSTATIC: {HDC dc=reinterpret_cast<HDC>(wp);SetTextColor(dc,RGB(240,240,240));SetBkColor(dc,RGB(0,0,0));return reinterpret_cast<LRESULT>(GetStockObject(BLACK_BRUSH));}
+            case WM_DRAWITEM:if(app && wp) {app->drawButton(*reinterpret_cast<DRAWITEMSTRUCT*>(lp));return TRUE;}break;
+            case WM_GETMINMAXINFO: {auto* size=reinterpret_cast<MINMAXINFO*>(lp);size->ptMinTrackSize={1120,980};return 0;}
+            case WM_CTLCOLORSTATIC:
+            case WM_CTLCOLOREDIT:
+            case WM_CTLCOLORBTN: {HDC dc=reinterpret_cast<HDC>(wp);SetTextColor(dc,RGB(51,65,85));SetBkColor(dc,RGB(255,255,255));return reinterpret_cast<LRESULT>(app->cardBrush);}
             case WM_ERASEBKGND:return 1;
             case WM_PAINT: {PAINTSTRUCT paint{};HDC dc=BeginPaint(window,&paint);RECT rect{};GetClientRect(window,&rect);try {app->paint(dc,rect);} catch(...) {EndPaint(window,&paint);throw;} EndPaint(window,&paint);return 0;}
             case WM_DESTROY:KillTimer(window,3);app->stop();PostQuitMessage(0);return 0;
@@ -700,7 +721,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR commandLine,int show) {
     try {
         Preview app;WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"TriggerLabCapturePreviewClass";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         if(!RegisterClassW(&wc)) return 1;
-        HWND window=CreateWindowW(wc.lpszClassName,L"TriggerLab — тренировки Kovaak’s / Aimlabs",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1040,890,nullptr,nullptr,instance,&app);
+        HWND window=CreateWindowW(wc.lpszClassName,L"TriggerLab — тренировки Kovaak’s / Aimlabs",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1120,980,nullptr,nullptr,instance,&app);
         if(!window) return 1;
         if(std::wstring(commandLine)==L"--click-test") {const int result=liveClickTest(app);DestroyWindow(window);return result;}
         if(std::wstring(commandLine)==L"--center-click-test") {const int result=liveClickTest(app,true);DestroyWindow(window);return result;}

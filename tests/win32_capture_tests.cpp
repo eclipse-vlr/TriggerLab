@@ -25,6 +25,10 @@ int main() {
         HWND window=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"Capture test",WS_POPUP|WS_VISIBLE,x,y,64,64,nullptr,nullptr,wc.hInstance,nullptr);
         if(!window) return 77;
         UpdateWindow(window); GdiFlush(); DwmFlush();
+        // DwmFlush may finish before a newly shown top-level surface is visible.
+        Sleep(40);
+        MSG message{};while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&message);DispatchMessageW(&message);}
+        UpdateWindow(window);GdiFlush();DwmFlush();
         const DWORD baseline=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS);
         auto sample=capture.capture({x+20,y+20,17,17});
         if(sample.status==CaptureStatus::DesktopUnavailable) {DestroyWindow(window); std::cout<<"SKIP: interactive input desktop unavailable\n"; return 77;}
