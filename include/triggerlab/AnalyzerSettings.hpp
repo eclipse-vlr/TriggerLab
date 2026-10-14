@@ -6,6 +6,7 @@ namespace triggerlab {
 struct AnalyzerSettings {
     bool center=true,dryRun=true;
     int side=31,ignoreRadius=3,minimumPercent=3,offsetX=0,offsetY=0,dwellMs=70,cooldownMs=50,clickMs=30;
+    bool darkTheme=false;
 };
 bool validAnalyzerSettings(const AnalyzerSettings&) noexcept;
 AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path&);

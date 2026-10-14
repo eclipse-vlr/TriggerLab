@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <commctrl.h>
+#include <uxtheme.h>
 #include "triggerlab/ColorProfile.hpp"
 #include "triggerlab/HoverClickGate.hpp"
 #include "triggerlab/ClickPermission.hpp"
@@ -16,6 +18,13 @@
 #include <string>
 #include <optional>
 namespace {
+struct ThemeColors {
+    COLORREF background,card,input,border,text,muted,accent,button,pressed,stopFill,stopText;
+};
+ThemeColors themeColors(bool dark) {
+    if(dark) return {RGB(48,51,57),RGB(62,66,73),RGB(73,78,86),RGB(91,98,108),RGB(241,243,247),RGB(190,198,211),RGB(147,190,255),RGB(77,83,94),RGB(91,102,120),RGB(96,65,69),RGB(255,184,184)};
+    return {RGB(242,246,252),RGB(255,255,255),RGB(248,250,252),RGB(226,232,240),RGB(30,41,59),RGB(100,116,139),RGB(37,99,235),RGB(241,245,249),RGB(219,234,254),RGB(254,242,242),RGB(185,28,28)};
+}
 struct PaintSurface {
     HDC dc=nullptr;HBITMAP bitmap=nullptr;HGDIOBJ previous=nullptr;
     PaintSurface(HDC target,int w,int h) {
@@ -29,7 +38,9 @@ struct PaintSurface {
 struct Preview {
     HFONT uiFont=nullptr,titleFont=nullptr,headingFont=nullptr;
     HBRUSH cardBrush=CreateSolidBrush(RGB(255,255,255));
-    ~Preview() {if(uiFont) DeleteObject(uiFont);if(titleFont) DeleteObject(titleFont);if(headingFont) DeleteObject(headingFont);if(cardBrush) DeleteObject(cardBrush);}
+    HBRUSH inputBrush=CreateSolidBrush(RGB(248,250,252));
+    HWND tooltip=nullptr;
+    ~Preview() {if(uiFont) DeleteObject(uiFont);if(titleFont) DeleteObject(titleFont);if(headingFont) DeleteObject(headingFont);if(cardBrush) DeleteObject(cardBrush);if(inputBrush) DeleteObject(inputBrush);}
     triggerlab::ScreenCapture capture;
     triggerlab::CaptureSample sample;
     triggerlab::ColorMask mask;
@@ -63,6 +74,26 @@ struct Preview {
         settings=triggerlab::loadAnalyzerSettings(settingsPath);
         settings.dryRun=true; // Every launch starts in diagnostic mode.
         gate.setTiming(std::chrono::milliseconds{settings.dwellMs},std::chrono::milliseconds{settings.cooldownMs});
+    }
+    void applyTheme() {
+        const auto p=themeColors(settings.darkTheme);
+        auto newCard=CreateSolidBrush(p.card),newInput=CreateSolidBrush(p.input);
+        if(newCard && newInput) {DeleteObject(cardBrush);DeleteObject(inputBrush);cardBrush=newCard;inputBrush=newInput;}
+        else {if(newCard) DeleteObject(newCard);if(newInput) DeleteObject(newInput);}
+        SetWindowTextW(GetDlgItem(window,21),settings.darkTheme?L"Серая тема: включена":L"Серая тема: выключена");
+        BOOL dark=settings.darkTheme;
+        DwmSetWindowAttribute(window,20,&dark,sizeof(dark));
+        DwmSetWindowAttribute(window,34,&p.background,sizeof(p.background));
+        const COLORREF systemCaptionText=0xFFFFFFFF;
+        DwmSetWindowAttribute(window,36,&systemCaptionText,sizeof(systemCaptionText));
+        if(tooltip) {SendMessageW(tooltip,TTM_SETTIPBKCOLOR,p.card,0);SendMessageW(tooltip,TTM_SETTIPTEXTCOLOR,p.text,0);}
+        RedrawWindow(window,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN);
+    }
+    void syncActions() {
+        EnableWindow(GetDlgItem(window,2),running || pickDeadline || targetDeadline || aimPickDeadline);
+        const bool target=targetWindow && IsWindow(targetWindow);
+        EnableWindow(autoControl,running && target);
+        EnableWindow(GetDlgItem(window,20),settings.center && target);
     }
     std::optional<triggerlab::Region> clientBounds() const {
         if(!targetWindow || !IsWindow(targetWindow) || IsIconic(targetWindow)) return {};
@@ -317,6 +348,7 @@ struct Preview {
             return CreateWindowW(L"BUTTON",label,WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW,x,y,w,h,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),nullptr,nullptr);
         };
         auto label=[&](const wchar_t* text,int x,int y,int width) {CreateWindowW(L"STATIC",text,WS_CHILD|WS_VISIBLE,x,y,width,22,window,nullptr,nullptr,nullptr);};
+        button(21,L"Серая тема: выключена",914,20,168,36);
         button(7,L"Выбрать окно (3 сек.)",40,130,260,58);
         button(18,L"Kovaak’s",316,130,135);button(19,L"Aimlabs",316,174,135,30);
         modeControl=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,40,210,410,140,window,reinterpret_cast<HMENU>(15),nullptr,nullptr);
@@ -344,7 +376,23 @@ struct Preview {
         button(10,L"Из файла…",662,530,152);
         button(14,L"Палитра / область",828,530,234);
         EnumChildWindows(window,[](HWND child,LPARAM f)->BOOL {SendMessageW(child,WM_SETFONT,static_cast<WPARAM>(f),TRUE);return TRUE;},reinterpret_cast<LPARAM>(uiFont));
-        syncColor();syncSettings();refreshTargetButton();SetTimer(window,3,500,nullptr);
+        EnumChildWindows(window,[](HWND child,LPARAM)->BOOL {SetWindowTheme(child,L"",L"");return TRUE;},0);
+        for(HWND control:{dryControl,autoControl}) SetWindowSubclass(control,checkProcedure,1,reinterpret_cast<DWORD_PTR>(this));
+        INITCOMMONCONTROLSEX common{sizeof(common),ICC_WIN95_CLASSES};InitCommonControlsEx(&common);
+        tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,window,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if(tooltip) {
+            SetWindowTheme(tooltip,L"",L"");SendMessageW(tooltip,TTM_SETMAXTIPWIDTH,0,360);
+            SendMessageW(tooltip,WM_SETFONT,reinterpret_cast<WPARAM>(uiFont),FALSE);
+            auto tip=[&](HWND control,const wchar_t* text) {TOOLINFOW info{sizeof(info)};info.uFlags=TTF_IDISHWND|TTF_SUBCLASS;info.hwnd=window;info.uId=reinterpret_cast<UINT_PTR>(control);info.lpszText=const_cast<wchar_t*>(text);SendMessageW(tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&info));};
+            const wchar_t* tips[]={L"Размер квадратной области вокруг прицела: нечётное число от 5 до 101 пикселя.",L"Радиус исключения перекрестия. Центр не участвует в распознавании; 0 отключает исключение.",L"Какая доля области должна совпадать с цветом: от 1 до 100 процентов.",L"Смещение области вправо (+) или влево (−) от центра окна.",L"Смещение области вниз (+) или вверх (−) от центра окна.",L"Цвет должен непрерывно совпадать столько миллисекунд до срабатывания.",L"Минимальный интервал после предыдущего клика. Для повторения цвет должен исчезнуть и появиться вновь.",L"Длительность удержания левой кнопки мыши: 5–150 мс. По умолчанию 30 мс."};
+            for(int i=0;i<8;++i) tip(settingEdits[i],tips[i]);
+            tip(colorEdits[3],L"Допустимое отклонение каналов RGB: 0–255. Большой допуск может захватывать фон.");
+            tip(dryControl,L"Проверка распознавания и задержки без отправки мышиных кликов.");
+            tip(autoControl,L"Сначала выберите окно и начните захват. Один клик на непрерывное совпадение; F9 останавливает работу.");
+            tip(GetDlgItem(window,20),L"Через 3 секунды откроется снимок прицела. Активируйте тренировку и выберите цвет мишени в палитре.");
+            tip(GetDlgItem(window,21),L"Переключение между светлой и тёмно-серой темой. Выбор сохраняется автоматически.");
+        }
+        syncColor();syncSettings();refreshTargetButton();applyTheme();syncActions();SetTimer(window,3,500,nullptr);
     }
     void command(int id,int notification=BN_CLICKED) {
         if(id==1) {if(SetTimer(window,1,10,nullptr)) {running=true;status=L"Захват активен";}else status=L"Не удалось начать захват";}
@@ -359,6 +407,11 @@ struct Preview {
         else if(id==18) findTrainer(L"kovaak");
         else if(id==19) findTrainer(L"aimlab");
         else if(id==20) beginAimSelection();
+        else if(id==21) {
+            settings.darkTheme=!settings.darkTheme;applyTheme();std::string error;
+            notice=triggerlab::saveAnalyzerSettings(settingsPath,settings,error)?L"Тема сохранена":L"Тема изменена, но не удалось сохранить выбор";
+            return;
+        }
         else if(id==15 || id==16) {
             if(id==15 && notification!=CBN_SELCHANGE) return;
             cancelSelection();disableClicks();settings.center=SendMessageW(modeControl,CB_GETCURSEL,0,0)==0;settings.dryRun=SendMessageW(dryControl,BM_GETCHECK,0,0)==BST_CHECKED;
@@ -376,11 +429,11 @@ struct Preview {
                 status=L"Автоклик включён; активируйте выбранное окно";
             } else clickStatus=L"Ожидаю цвет в выбранном окне";
         } else SetFocus(window);
-        notice=status;InvalidateRect(window,nullptr,FALSE);
+        syncActions();notice=status;InvalidateRect(window,nullptr,FALSE);
     }
     std::wstring notice;
     std::wstring status=L"Захват остановлен";
-    void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};status=L"Захват остановлен";notice=status;InvalidateRect(window,nullptr,FALSE);}
+    void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};status=L"Захват остановлен";notice=status;syncActions();InvalidateRect(window,nullptr,FALSE);}
     void update(bool pick=false) {
         if(!running && !pick) return;
         if(syntheticDown) {
@@ -437,6 +490,11 @@ struct Preview {
         if(!triggerlab::imagePaletteDialogSmoke()) return false;
         colorPath=path;
         settingsPath=path.parent_path()/L"analyzer-settings.json";
+        const bool originalTheme=settings.darkTheme;
+        command(21);
+        if(settings.darkTheme==originalTheme || triggerlab::loadAnalyzerSettings(settingsPath).darkTheme!=settings.darkTheme || running || autoClick) return false;
+        command(21);
+        if(settings.darkTheme!=originalTheme || triggerlab::loadAnalyzerSettings(settingsPath).darkTheme!=originalTheme) return false;
         const wchar_t* analyzerValues[]={L"41",L"4",L"5",L"-20",L"10",L"100",L"80",L"40"};
         for(int i=0;i<8;++i) SetWindowTextW(settingEdits[i],analyzerValues[i]);
         if(!applySettings()) return false;
@@ -513,48 +571,78 @@ struct Preview {
         command(20); // A closed target cannot start a delayed snapshot.
         return labels && !running && !autoClick && !sample.frame && !pickDeadline && !targetDeadline && !aimPickDeadline;
     }
+    static LRESULT CALLBACK checkProcedure(HWND control,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR context) {
+        if(message==WM_PAINT) {
+            auto& app=*reinterpret_cast<Preview*>(context);PAINTSTRUCT paint{};HDC dc=BeginPaint(control,&paint);app.drawCheck(control,dc);EndPaint(control,&paint);return 0;
+        }
+        if(message==WM_NCDESTROY) RemoveWindowSubclass(control,checkProcedure,id);
+        return DefSubclassProc(control,message,wp,lp);
+    }
+    void drawCheck(HWND control,HDC dc) {
+        const auto p=themeColors(settings.darkTheme);RECT bounds{};GetClientRect(control,&bounds);
+        SetDCBrushColor(dc,p.card);FillRect(dc,&bounds,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        const bool checked=SendMessageW(control,BM_GETCHECK,0,0)==BST_CHECKED;
+        const bool enabled=IsWindowEnabled(control)!=FALSE;
+        const int top=(bounds.bottom-18)/2;
+        auto oldBrush=SelectObject(dc,GetStockObject(DC_BRUSH)),oldPen=SelectObject(dc,GetStockObject(DC_PEN));
+        SetDCBrushColor(dc,checked?RGB(37,99,235):p.input);SetDCPenColor(dc,checked?RGB(37,99,235):p.border);RoundRect(dc,0,top,18,top+18,5,5);
+        if(checked) {HPEN pen=CreatePen(PS_SOLID,2,RGB(255,255,255));auto previous=SelectObject(dc,pen);MoveToEx(dc,4,top+9,nullptr);LineTo(dc,8,top+13);LineTo(dc,14,top+5);SelectObject(dc,previous);DeleteObject(pen);}
+        SelectObject(dc,oldBrush);SelectObject(dc,oldPen);
+        wchar_t text[256]{};GetWindowTextW(control,text,256);auto oldFont=SelectObject(dc,uiFont);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,enabled?p.text:p.muted);
+        RECT label{26,0,bounds.right,bounds.bottom};DrawTextW(dc,text,-1,&label,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        if(GetFocus()==control) {InflateRect(&label,-2,-4);DrawFocusRect(dc,&label);}SelectObject(dc,oldFont);
+    }
     void drawButton(const DRAWITEMSTRUCT& item) {
+        const auto p=themeColors(settings.darkTheme);
         const bool primary=item.CtlID==1 || item.CtlID==20;
-        const bool stop=item.CtlID==2;
+        const bool stop=item.CtlID==2,disabled=(item.itemState&ODS_DISABLED)!=0;
         const bool pressed=(item.itemState&ODS_SELECTED)!=0;
-        COLORREF fill=primary?(pressed?RGB(29,78,216):RGB(37,99,235)):stop?RGB(254,242,242):pressed?RGB(219,234,254):RGB(241,245,249);
-        SetDCBrushColor(item.hDC,fill);SetDCPenColor(item.hDC,primary?fill:stop?RGB(254,202,202):RGB(226,232,240));
+        const COLORREF fill=disabled?p.input:primary?(pressed?RGB(29,78,216):RGB(37,99,235)):stop?p.stopFill:pressed?p.pressed:p.button;
+        SetDCBrushColor(item.hDC,fill);SetDCPenColor(item.hDC,primary && !disabled?fill:p.border);
         auto oldBrush=SelectObject(item.hDC,GetStockObject(DC_BRUSH));auto oldPen=SelectObject(item.hDC,GetStockObject(DC_PEN));
         RoundRect(item.hDC,item.rcItem.left,item.rcItem.top,item.rcItem.right,item.rcItem.bottom,10,10);
         wchar_t caption[512]{};GetWindowTextW(item.hwndItem,caption,512);SetBkMode(item.hDC,TRANSPARENT);
-        SetTextColor(item.hDC,primary?RGB(255,255,255):stop?RGB(185,28,28):RGB(30,41,59));
+        SetTextColor(item.hDC,disabled?p.muted:primary?RGB(255,255,255):stop?p.stopText:p.text);
         auto oldFont=SelectObject(item.hDC,uiFont);RECT text=item.rcItem;InflateRect(&text,-8,-4);
-        DrawTextW(item.hDC,caption,-1,&text,DT_CENTER|DT_VCENTER|DT_WORDBREAK);
+        if(item.CtlID==21) {
+            const int left=item.rcItem.right-54,top=(item.rcItem.top+item.rcItem.bottom)/2-11;
+            SetDCBrushColor(item.hDC,settings.darkTheme?RGB(37,99,235):p.border);SetDCPenColor(item.hDC,settings.darkTheme?RGB(37,99,235):p.border);
+            RoundRect(item.hDC,left,top,left+44,top+22,22,22);
+            SetDCBrushColor(item.hDC,RGB(255,255,255));SetDCPenColor(item.hDC,RGB(255,255,255));
+            const int knob=left+(settings.darkTheme?24:3);Ellipse(item.hDC,knob,top+3,knob+16,top+19);
+            text.right=left-4;DrawTextW(item.hDC,L"Серая тема",-1,&text,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        } else DrawTextW(item.hDC,caption,-1,&text,DT_CENTER|DT_VCENTER|DT_WORDBREAK);
         if(item.itemState&ODS_FOCUS) {RECT focus=item.rcItem;InflateRect(&focus,-4,-4);DrawFocusRect(item.hDC,&focus);}
         SelectObject(item.hDC,oldFont);SelectObject(item.hDC,oldBrush);SelectObject(item.hDC,oldPen);
     }
     void paint(HDC target,RECT rect) {
+        const auto p=themeColors(settings.darkTheme);
         const int w=rect.right,h=rect.bottom;if(w<=0 || h<=0) return;
         if(!backBuffer || bufferWidth!=w || bufferHeight!=h) {backBuffer=std::make_unique<PaintSurface>(target,w,h);bufferWidth=w;bufferHeight=h;}
         if(!backBuffer->valid()) return;HDC dc=backBuffer->dc;
-        SetDCBrushColor(dc,RGB(242,246,252));FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));SetBkMode(dc,TRANSPARENT);
+        SetDCBrushColor(dc,p.background);FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));SetBkMode(dc,TRANSPARENT);
         auto oldFont=SelectObject(dc,uiFont);
-        auto line=[&](int x,int y,const std::wstring& text,COLORREF color=RGB(100,116,139),HFONT font=nullptr) {
-            SelectObject(dc,font?font:uiFont);SetTextColor(dc,color);TextOutW(dc,x,y,text.c_str(),static_cast<int>(text.size()));
+        auto line=[&](int x,int y,const std::wstring& text,COLORREF color=CLR_INVALID,HFONT font=nullptr) {
+            SelectObject(dc,font?font:uiFont);SetTextColor(dc,color==CLR_INVALID?p.muted:color);TextOutW(dc,x,y,text.c_str(),static_cast<int>(text.size()));
         };
         auto wrapped=[&](RECT area,const std::wstring& text,COLORREF color) {SelectObject(dc,uiFont);SetTextColor(dc,color);DrawTextW(dc,text.c_str(),static_cast<int>(text.size()),&area,DT_LEFT|DT_WORDBREAK|DT_END_ELLIPSIS);};
         auto card=[&](int left,int top,int right,int bottom) {
-            auto b=SelectObject(dc,GetStockObject(DC_BRUSH));auto p=SelectObject(dc,GetStockObject(DC_PEN));
-            SetDCBrushColor(dc,RGB(255,255,255));SetDCPenColor(dc,RGB(226,232,240));RoundRect(dc,left,top,right,bottom,16,16);SelectObject(dc,b);SelectObject(dc,p);
+            auto b=SelectObject(dc,GetStockObject(DC_BRUSH));auto oldPen=SelectObject(dc,GetStockObject(DC_PEN));
+            SetDCBrushColor(dc,p.card);SetDCPenColor(dc,p.border);RoundRect(dc,left,top,right,bottom,16,16);SelectObject(dc,b);SelectObject(dc,oldPen);
         };
-        line(24,14,L"TriggerLab",RGB(15,23,42),titleFont);
-        line(210,26,L"Настройте цвет мишени · проверьте обнаружение · включите триггер");
+        line(24,14,L"TriggerLab",p.text,titleFont);
+        line(210,26,L"Окно → цвет мишени → проверка → триггер");
         card(20,84,488,242);card(508,84,1082,242);card(20,260,1082,406);card(20,424,1082,584);
-        line(40,100,L"1. Окно и режим обнаружения",RGB(30,41,59),headingFont);
-        line(548,100,L"3. Проверка и запуск",RGB(30,41,59),headingFont);
-        line(40,276,L"Область и время срабатывания",RGB(30,41,59),headingFont);
-        line(40,436,L"2. Цвет мишени",RGB(30,41,59),headingFont);
+        line(40,100,L"1. Окно и режим обнаружения",p.text,headingFont);
+        line(548,100,L"3. Проверка и запуск",p.text,headingFont);
+        line(40,276,L"Область и время срабатывания",p.text,headingFont);
+        line(40,436,L"2. Цвет мишени",p.text,headingFont);
         line(800,442,L"Текущий цвет");
         HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{800,482,1062,512};FillRect(dc,&patch,swatch);DeleteObject(swatch);
         card(20,602,360,882);card(380,602,720,882);card(740,602,1082,882);
-        line(40,620,L"Область прицела",RGB(30,41,59),headingFont);line(400,620,L"Совпадения цвета",RGB(30,41,59),headingFont);
-        line(760,620,L"Состояние",RGB(30,41,59),headingFont);
-        RECT image{40,652,340,852},maskRect{400,652,700,852};SetDCBrushColor(dc,RGB(248,250,252));FillRect(dc,&image,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));FillRect(dc,&maskRect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        line(40,620,L"Область прицела",p.text,headingFont);line(400,620,L"Совпадения цвета",p.text,headingFont);
+        line(760,620,L"Состояние",p.text,headingFont);
+        RECT image{40,652,340,852},maskRect{400,652,700,852};SetDCBrushColor(dc,p.input);FillRect(dc,&image,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));FillRect(dc,&maskRect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         if(sample.frame) {
             BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=sample.frame->width();info.bmiHeader.biHeight=-sample.frame->height();info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
             const int side=200;const int x=90,mx=450;
@@ -562,15 +650,19 @@ struct Preview {
             triggerlab::Frame maskFrame(sample.frame->width(),sample.frame->height());
             for(std::size_t i=0;i<mask.pixels.size();++i) {auto value=mask.pixels[i];maskFrame.data()[i]={value,value,value,255};}
             StretchDIBits(dc,mx,652,side,side,0,0,maskFrame.width(),maskFrame.height(),maskFrame.data(),&info,DIB_RGB_COLORS,SRCCOPY);
-        } else {wrapped({65,720,320,780},L"Начните захват и активируйте выбранное окно",RGB(100,116,139));wrapped({420,720,685,780},L"Белым показан найденный цвет",RGB(100,116,139));}
-        wrapped({760,654,1062,699},running?status:L"Захват остановлен",running?RGB(37,99,235):RGB(100,116,139));
-        line(760,710,autoClick?L"Триггер включён":L"Триггер выключен",autoClick?RGB(22,163,74):RGB(100,116,139));
-        wrapped({760,740,1062,787},clickStatus,RGB(30,41,59));
-        line(760,798,L"Клики: "+std::to_wstring(clickCount)+L"   Проверки: "+std::to_wstring(diagnosticCount));
-        line(760,828,L"Найдено: "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"%  /  порог "+std::to_wstring(settings.minimumPercent)+L"%");
+        } else {wrapped({65,720,320,780},L"Начните захват и активируйте выбранное окно",p.muted);wrapped({420,720,685,780},L"Белым показан найденный цвет",p.muted);}
+        RECT badge{760,651,1062,680};SetDCBrushColor(dc,p.input);FillRect(dc,&badge,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        line(770,656,settings.dryRun?L"ПРОВЕРКА · без кликов":L"РЕАЛЬНЫЕ КЛИКИ",settings.dryRun?p.accent:settings.darkTheme?RGB(255,204,143):RGB(180,83,9));
+        wrapped({760,693,1062,734},running?status:L"Захват остановлен",running?p.accent:p.muted);
+        line(760,742,autoClick?L"Триггер включён":L"Триггер выключен",autoClick?(settings.darkTheme?RGB(134,239,172):RGB(22,163,74)):p.muted);
+        wrapped({760,771,1062,811},clickStatus,p.text);
+        line(760,817,L"Клики: "+std::to_wstring(clickCount)+L"   Проверки: "+std::to_wstring(diagnosticCount));
+        line(760,845,L"Найдено: "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"%  /  порог "+std::to_wstring(settings.minimumPercent)+L"%");
+        RECT track{760,871,1062,875};SetDCBrushColor(dc,p.border);FillRect(dc,&track,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        track.right=track.left+static_cast<LONG>(302*std::clamp(mask.coverage,0.0,1.0));SetDCBrushColor(dc,p.accent);FillRect(dc,&track,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         line(40,858,settings.center?L"Снимок вокруг центра окна":L"Снимок под курсором");
         line(400,858,settings.center?L"Перекрестие исключено":L"Проверка пикселя курсора");
-        wrapped({24,894,825,932},notice,RGB(100,116,139));
+        wrapped({24,894,825,932},notice,p.muted);
         line(860,894,L"F9 / Esc — остановить");
         SelectObject(dc,oldFont);BitBlt(target,0,0,w,h,dc,0,0,SRCCOPY);
     }
@@ -584,7 +676,7 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             case WM_COMMAND:app->command(LOWORD(wp),HIWORD(wp));return 0;
             case WM_TIMER:
                 if(wp==4) {if(triggerlab::Clock::now()>=app->releaseAt) app->finishClick();return 0;}
-                if(wp==3) {app->refreshTargetButton();return 0;}
+                if(wp==3) {app->refreshTargetButton();app->syncActions();return 0;}
                 if(wp==2) app->selectionTick(GetTickCount64());
                 else if(wp==1) app->update();return 0;
             case WM_HOTKEY:if(wp==9) app->stop();return 0;
@@ -596,7 +688,13 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             case WM_GETMINMAXINFO: {auto* size=reinterpret_cast<MINMAXINFO*>(lp);size->ptMinTrackSize={1120,980};return 0;}
             case WM_CTLCOLORSTATIC:
             case WM_CTLCOLOREDIT:
-            case WM_CTLCOLORBTN: {HDC dc=reinterpret_cast<HDC>(wp);SetTextColor(dc,RGB(51,65,85));SetBkColor(dc,RGB(255,255,255));return reinterpret_cast<LRESULT>(app->cardBrush);}
+            case WM_CTLCOLORLISTBOX:
+            case WM_CTLCOLORBTN: {
+                const auto p=themeColors(app->settings.darkTheme);HDC dc=reinterpret_cast<HDC>(wp);
+                const bool input=message==WM_CTLCOLOREDIT || message==WM_CTLCOLORLISTBOX || reinterpret_cast<HWND>(lp)==app->modeControl;
+                SetTextColor(dc,p.text);SetBkColor(dc,input?p.input:p.card);
+                return reinterpret_cast<LRESULT>(input?app->inputBrush:app->cardBrush);
+            }
             case WM_ERASEBKGND:return 1;
             case WM_PAINT: {PAINTSTRUCT paint{};HDC dc=BeginPaint(window,&paint);RECT rect{};GetClientRect(window,&rect);try {app->paint(dc,rect);} catch(...) {EndPaint(window,&paint);throw;} EndPaint(window,&paint);return 0;}
             case WM_DESTROY:KillTimer(window,3);app->stop();PostQuitMessage(0);return 0;

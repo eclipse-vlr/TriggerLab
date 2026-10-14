@@ -23,9 +23,19 @@ int main() {
     HoverClickGate gate;gate.setTiming(120ms,100ms);auto t=Clock::time_point{}+1s;
     check(!gate.step(true,true,t) && !gate.step(true,true,t+40ms) && !gate.step(true,true,t+80ms) && !gate.step(true,true,t+119ms) && gate.step(true,true,t+120ms),"custom dwell used");
     auto dir=std::filesystem::temp_directory_path()/("triggerlab-analyzer-"+std::to_string(Clock::now().time_since_epoch().count()));
-    auto path=dir/"settings.json";s.dwellMs=123;s.cooldownMs=456;s.clickMs=60;s.offsetX=-80;s.dryRun=false;std::string error;
+    auto path=dir/"settings.json";s.dwellMs=123;s.cooldownMs=456;s.clickMs=60;s.offsetX=-80;s.dryRun=false;s.darkTheme=true;std::string error;
     check(saveAnalyzerSettings(path,s,error),"settings save");auto saved=loadAnalyzerSettings(path);
-    check(saved.dwellMs==123 && saved.cooldownMs==456 && saved.clickMs==60 && saved.offsetX==-80 && !saved.dryRun,"settings roundtrip");
+    check(saved.dwellMs==123 && saved.cooldownMs==456 && saved.clickMs==60 && saved.offsetX==-80 && !saved.dryRun && saved.darkTheme,"settings and theme roundtrip");
+    std::string current;
+    {std::ifstream in(path);current.assign(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());}
+    const auto themeEntry=current.find(",\n\"dark_theme\":1");check(themeEntry!=std::string::npos,"theme serialized");
+    auto legacy=current;legacy.erase(themeEntry,std::string(",\n\"dark_theme\":1").size());
+    {std::ofstream out(path);out<<legacy;}
+    check(loadAnalyzerSettings(path).dwellMs==123 && !loadAnalyzerSettings(path).darkTheme,"legacy settings keep values and light theme");
+    auto malformed=current;malformed.replace(malformed.find("\"dark_theme\":1"),14,"\"dark_theme\":2");
+    {std::ofstream out(path);out<<malformed;}
+    check(loadAnalyzerSettings(path).dwellMs==70 && !loadAnalyzerSettings(path).darkTheme,"invalid theme rejected");
+    check(saveAnalyzerSettings(path,s,error),"restore valid settings");
     s.side=200;check(!saveAnalyzerSettings(path,s,error) && loadAnalyzerSettings(path).dwellMs==123,"invalid save preserves file");
     {std::ofstream out(path);out<<"{\"schema_version\":1,\"center\":0}";}
     check(loadAnalyzerSettings(path).dryRun && loadAnalyzerSettings(path).dwellMs==70,"corruption returns safe defaults");
