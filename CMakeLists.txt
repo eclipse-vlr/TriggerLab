@@ -21,6 +21,7 @@ add_library(triggerlab_core STATIC
     src/ColorProfile.cpp
     src/ImageColor.cpp
     src/AnalyzerSettings.cpp
+    src/TrainingProfile.cpp
 )
 target_include_directories(triggerlab_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(triggerlab_core PUBLIC cxx_std_20)
@@ -61,6 +62,9 @@ endif()
 
 if(TRIGGERLAB_BUILD_TESTS)
     enable_testing()
+    add_executable(triggerlab_training_profile_tests tests/training_profile_tests.cpp)
+    target_link_libraries(triggerlab_training_profile_tests PRIVATE triggerlab_core)
+    add_test(NAME triggerlab_training_profile_tests COMMAND triggerlab_training_profile_tests)
     add_executable(triggerlab_analyzer_tests tests/analyzer_tests.cpp)
     target_link_libraries(triggerlab_analyzer_tests PRIVATE triggerlab_core)
     add_test(NAME triggerlab_analyzer_tests COMMAND triggerlab_analyzer_tests)
