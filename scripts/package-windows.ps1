@@ -26,6 +26,7 @@ foreach ($exe in @('TriggerLab.exe','TriggerLabTrainer.exe')) {
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE.txt') -Destination $packagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/QUICKSTART-RU.txt') -Destination (Join-Path $packagePath 'README.txt')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Destination $packagePath
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/trainer-validation.md') -Destination $packagePath
 $revision = & git -C $repoRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read Git revision' }
 $dirty = [bool](& git -C $repoRoot status --porcelain)
