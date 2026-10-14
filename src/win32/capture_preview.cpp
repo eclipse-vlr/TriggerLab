@@ -20,6 +20,37 @@
 #include <string>
 #include <optional>
 namespace {
+void pumpTestMessages() {
+    // A capture timer can replenish the queue faster than a slow desktop drains
+    // it. Yield so the caller can check its deadline and foreground/input state.
+    const auto deadline=triggerlab::Clock::now()+std::chrono::milliseconds{20};
+    MSG message{};
+    for(int count=0;count<64 && triggerlab::Clock::now()<deadline;++count) {
+        if(!PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) break;
+        TranslateMessage(&message);DispatchMessageW(&message);
+    }
+}
+bool testMessagePumpYields() {
+    int dispatched=0;
+    HWND queue=CreateWindowW(L"STATIC",L"",0,0,0,0,0,HWND_MESSAGE,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!queue) return false;
+    const auto callback=+[](HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR context)->LRESULT {
+        if(message==WM_APP) {
+            auto& count=*reinterpret_cast<int*>(context);
+            if(++count<256) PostMessageW(window,WM_APP,0,0);
+            return 0;
+        }
+        return DefSubclassProc(window,message,wp,lp);
+    };
+    const bool installed=SetWindowSubclass(queue,callback,1,reinterpret_cast<DWORD_PTR>(&dispatched))!=FALSE;
+    const bool posted=installed && PostMessageW(queue,WM_APP,0,0);
+    if(posted) pumpTestMessages();
+    MSG pending{};
+    const bool yielded=posted && dispatched>0 && dispatched<=64 && PeekMessageW(&pending,queue,WM_APP,WM_APP,PM_NOREMOVE);
+    if(installed) RemoveWindowSubclass(queue,callback,1);
+    while(PeekMessageW(&pending,queue,0,0,PM_REMOVE)) {}
+    DestroyWindow(queue);return yielded;
+}
 struct ThemeColors {
     COLORREF background,card,input,border,text,muted,accent,button,pressed,stopFill,stopText;
 };
@@ -1074,6 +1105,8 @@ struct Preview {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"smoke-test-report.txt");
         auto fail=[&](int line) {report<<"FAIL: preview smoke at line "<<line<<'\n';return false;};
+        if(!testMessagePumpYields()) {report<<"FAIL: message pump did not yield with a continuously replenished queue\n";return false;}
+        report<<"PASS: message pump yields with a continuously replenished queue\n";
         if(!triggerlab::imagePaletteDialogSmoke()) return fail(__LINE__);
         colorPath=path;
         settingsPath=path.parent_path()/L"analyzer-settings.json";
@@ -1602,6 +1635,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
     std::ofstream report(std::filesystem::path(executable).parent_path()/(guided?L"guided-test-report.txt":centerMode?L"center-test-report.txt":L"click-test-report.txt"));
+    report<<std::unitbuf<<"stage=setup guided="<<guided<<"\n";
     POINT cursor{};
     if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: cursor unavailable or physical input held\n";return 77;}
     HWND previous=GetForegroundWindow();ClickTestTarget state;state.crosshair=centerMode;
@@ -1627,9 +1661,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
     const bool attached=foregroundThread && foregroundThread!=thread && AttachThreadInput(thread,foregroundThread,TRUE);
     SetForegroundWindow(target);SetActiveWindow(target);SetFocus(target);
     if(attached) AttachThreadInput(thread,foregroundThread,FALSE);
-    auto pump=[] {
-        MSG msg{};while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&msg);DispatchMessageW(&msg);}
-    };
+    auto pump=[] {pumpTestMessages();};
     pump();
     int result=0;
     if(!app.permittedAt(cursor)) {report<<"SKIP: test window cannot receive focus\n";result=77;}
@@ -1637,6 +1669,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
         app.settings={};app.settings.center=centerMode;app.settings.dryRun=true;
         app.running=true;app.color.target={19,67,231,255};app.color.channelTolerance=0;app.color.space=triggerlab::ColorSpace::RGB;
         if(guided) {
+            report<<"stage=save-guided-settings\n";
             app.syncSettings();app.syncColor();app.command(3);if(!app.saveAll()) {app.stop();DestroyWindow(target);return 2;}
             // Selecting a color focuses the analyzer; resume only our own test scene.
             SetForegroundWindow(target);SetActiveWindow(target);SetFocus(target);
@@ -1647,7 +1680,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
             app.sample.cursorPixel && triggerlab::matchesColor(*app.sample.cursorPixel,app.color);
         if(!reference) app.running=false;
         const auto before=app.diagnosticCount;
-        if(guided && reference) app.guidedAction();
+        if(guided && reference) {report<<"stage=arm-diagnostic\n";app.guidedAction();}
         else {SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(8);}
         if(!reference) {report<<"SKIP: test reference pixels unavailable or covered by a desktop/pointer overlay\n";result=77;}
         else if(!app.autoClick) {report<<"SKIP: F9 unavailable\n";result=77;}
@@ -1662,6 +1695,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
                 }
                 return true;
             };
+            report<<"stage=observe-diagnostic\n";
             const bool dryStable=observe(guided?1000ms:250ms,guided);
             const bool dryPassed=dryStable && app.diagnosticCount==before+1 && state.downs==0 && state.ups==0 && (!guided || (app.verified && app.wizardStep()==3 && app.settings.dryRun));
             report<<"dry_run="<<dryPassed<<" center_mode="<<centerMode<<"\n";
@@ -1670,12 +1704,12 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
             report<<"dry rgb="<<int(p.red)<<","<<int(p.green)<<","<<int(p.blue)<<" mask="<<app.mask.coverage<<" held="<<Preview::inputHeld()<<" diagnostics="<<app.diagnosticCount<<" foreground="<<(GetForegroundWindow()==target)<<"\n";
             const int bytes=WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),nullptr,0,nullptr,nullptr);
             std::string reason(bytes,'\0');WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),reason.data(),bytes,nullptr,nullptr);report<<reason<<"\n";
-            if(guided && !dryPassed) {
-                report<<(dryStable?"FAIL: guided diagnostic did not verify the match\n":"SKIP: user cursor or foreground changed during diagnostic\n");
+            if(!dryPassed) {
+                report<<(dryStable?"FAIL: diagnostic did not verify the match without input\n":"SKIP: user cursor or foreground changed during diagnostic\n");
                 app.stop();app.targetWindow=nullptr;DestroyWindow(target);if(previous && IsWindow(previous)) SetForegroundWindow(previous);return dryStable?2:77;
             }
             const auto start=triggerlab::Clock::now();
-            if(guided) app.guidedAction();else {app.settings.dryRun=false;app.gate.reset();}
+            if(guided) {report<<"stage=arm-real-input\n";app.guidedAction();}else {app.settings.dryRun=false;app.gate.reset();}
             if(guided && (!app.autoClick || app.settings.dryRun)) {
                 const auto& message=app.notice;const int count=WideCharToMultiByte(CP_UTF8,0,message.data(),static_cast<int>(message.size()),nullptr,0,nullptr,nullptr);
                 std::string text(count,'\0');WideCharToMultiByte(CP_UTF8,0,message.data(),static_cast<int>(message.size()),text.data(),count,nullptr,nullptr);

@@ -22,6 +22,16 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Test core, configuration and Win32 window
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: TriggerLab-test-diagnostics
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/Release/*test-report.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload Windows executable
         uses: actions/upload-artifact@v7
         with:
