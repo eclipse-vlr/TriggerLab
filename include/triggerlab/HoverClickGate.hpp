@@ -1,6 +1,7 @@
 #pragma once
 #include "triggerlab/TriggerEngine.hpp"
 #include <optional>
+#include <algorithm>
 
 namespace triggerlab {
 // Observe fresh samples, then acknowledge only input actually sent to the OS.
@@ -10,6 +11,10 @@ public:
     static constexpr std::chrono::milliseconds dwell{70};
     static constexpr std::chrono::milliseconds cooldown{50};
     static constexpr std::chrono::milliseconds maximumSampleGap{50};
+    void setTiming(std::chrono::milliseconds delay,std::chrono::milliseconds interval) noexcept {
+        delay_=std::clamp(delay,std::chrono::milliseconds{1},std::chrono::milliseconds{2000});
+        interval_=std::clamp(interval,std::chrono::milliseconds{50},std::chrono::milliseconds{2000});reset();
+    }
 
     bool step(bool valid, bool matching, Clock::time_point now) noexcept {
         ready_ = false;
@@ -22,7 +27,7 @@ public:
         if (!lastSample_ || now < *lastSample_ || now - *lastSample_ > maximumSampleGap)
             since_ = now;
         lastSample_ = now;
-        ready_ = now - *since_ >= dwell && (!lastClick_ || now - *lastClick_ >= cooldown);
+        ready_ = now - *since_ >= delay_ && (!lastClick_ || now - *lastClick_ >= interval_);
         return ready_;
     }
     void acknowledgeClick(Clock::time_point now) noexcept {
@@ -41,5 +46,6 @@ public:
 private:
     std::optional<Clock::time_point> since_, lastSample_, lastClick_;
     bool latched_ = false, ready_ = false;
+    std::chrono::milliseconds delay_{dwell},interval_{cooldown};
 };
 }

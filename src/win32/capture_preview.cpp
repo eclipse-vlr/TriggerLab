@@ -1,10 +1,13 @@
 #include <windows.h>
 #include <commdlg.h>
+#include <dwmapi.h>
 #include "triggerlab/ColorProfile.hpp"
 #include "triggerlab/HoverClickGate.hpp"
 #include "triggerlab/ClickPermission.hpp"
 #include "triggerlab/ImageFile.hpp"
 #include "triggerlab/ImagePaletteDialog.hpp"
+#include "triggerlab/AnalyzerSettings.hpp"
+#include <cwctype>
 #include <fstream>
 #include <charconv>
 #include <array>
@@ -34,6 +37,18 @@ struct Preview {
     triggerlab::CaptureSample sample;
     triggerlab::ColorMask mask;
     triggerlab::ColorMatchConfig color;
+    triggerlab::AnalyzerSettings settings;
+    std::filesystem::path settingsPath;
+    std::array<HWND,8> settingEdits{};
+    bool syntheticDown=false;
+    triggerlab::Clock::time_point releaseAt{};
+    HWND modeControl=nullptr,dryControl=nullptr;
+    std::optional<triggerlab::CapturePoint> analysisPoint;
+    std::optional<triggerlab::Region> analyzedClient;
+    std::uint64_t diagnosticCount=0;
+    ULONGLONG lastPaint=0;
+    std::unique_ptr<PaintSurface> backBuffer;
+    int bufferWidth=0,bufferHeight=0;
     HWND window=nullptr,targetWindow=nullptr,autoControl=nullptr; bool running=false,autoClick=false;
     DWORD targetProcess=0;std::wstring targetTitle;
     std::array<HWND,4> colorEdits{};
@@ -47,12 +62,72 @@ struct Preview {
         wchar_t local[32768]{};auto length=GetEnvironmentVariableW(L"LOCALAPPDATA",local,32768);
         colorPath=length>0 && length<32768?std::filesystem::path(local)/L"TriggerLab"/L"selected-color.json":std::filesystem::path(L"selected-color.json");
         const auto loaded=triggerlab::loadColorProfile(colorPath);if(loaded.ok) color=loaded.color;
+        settingsPath=colorPath.parent_path()/L"analyzer-settings.json";
+        settings=triggerlab::loadAnalyzerSettings(settingsPath);
+        settings.dryRun=true; // Every launch starts in diagnostic mode.
+        gate.setTiming(std::chrono::milliseconds{settings.dwellMs},std::chrono::milliseconds{settings.cooldownMs});
+    }
+    std::optional<triggerlab::Region> clientBounds() const {
+        if(!targetWindow || !IsWindow(targetWindow) || IsIconic(targetWindow)) return {};
+        RECT rect{};POINT origin{};
+        if(!GetClientRect(targetWindow,&rect) || !ClientToScreen(targetWindow,&origin) || rect.right<=0 || rect.bottom<=0) return {};
+        return triggerlab::Region{origin.x,origin.y,rect.right,rect.bottom};
+    }
+    void syncSettings() {
+        const int values[]={settings.side,settings.ignoreRadius,settings.minimumPercent,settings.offsetX,settings.offsetY,settings.dwellMs,settings.cooldownMs,settings.clickMs};
+        for(int i=0;i<8;++i) SetWindowTextW(settingEdits[i],std::to_wstring(values[i]).c_str());
+        SendMessageW(modeControl,CB_SETCURSEL,settings.center?0:1,0);
+        SendMessageW(dryControl,BM_SETCHECK,settings.dryRun?BST_CHECKED:BST_UNCHECKED,0);
+    }
+    bool applySettings() {
+        cancelSelection();disableClicks();int values[8]{};
+        for(int i=0;i<8;++i) {
+            char text[32]{};GetWindowTextA(settingEdits[i],text,32);const std::string value(text);
+            const auto result=std::from_chars(value.data(),value.data()+value.size(),values[i]);
+            if(result.ec!=std::errc{} || result.ptr!=value.data()+value.size()) {status=L"Параметры: введите целые числа";return false;}
+        }
+        auto next=settings;next.side=values[0];next.ignoreRadius=values[1];next.minimumPercent=values[2];next.offsetX=values[3];next.offsetY=values[4];next.dwellMs=values[5];next.cooldownMs=values[6];next.clickMs=values[7];
+        if(!triggerlab::validAnalyzerSettings(next)) {status=L"ROI 5..101 нечётный; игнор < ROI/2; порог 1..100%; задержка 1..2000; интервал 50..2000";return false;}
+        settings=next;gate.setTiming(std::chrono::milliseconds{settings.dwellMs},std::chrono::milliseconds{settings.cooldownMs});
+        std::string error;status=triggerlab::saveAnalyzerSettings(settingsPath,settings,error)?L"Параметры сохранены; триггер выключен":L"Параметры применены, но сохранение не удалось";
+        return true;
+    }
+    void findTrainer(const wchar_t* name) {
+        cancelSelection();disableClicks();
+        struct Search {const wchar_t* name;HWND own;std::vector<HWND> found;} search{name,window,{}};
+        EnumWindows([](HWND candidate,LPARAM parameter)->BOOL {
+            auto& search=*reinterpret_cast<Search*>(parameter);if(candidate==search.own || !IsWindowVisible(candidate)) return TRUE;
+            DWORD processId=0;GetWindowThreadProcessId(candidate,&processId);
+            HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,processId);
+            if(!process) return TRUE;
+            wchar_t path[32768]{};DWORD length=32768;const bool readable=QueryFullProcessImageNameW(process,0,path,&length)!=FALSE;CloseHandle(process);
+            if(!readable) return TRUE;
+            auto executable=std::filesystem::path(path).filename().wstring();
+            for(auto& c:executable) c=static_cast<wchar_t>(std::towlower(c));
+            const bool kovaak=std::wstring_view(search.name)==L"kovaak";
+            if(executable.find(kovaak?L"fpsaimtrainer":L"aimlab")==std::wstring::npos) return TRUE;
+            wchar_t title[512]{};GetWindowTextW(candidate,title,512);std::wstring text(title);
+            for(auto& c:text) c=static_cast<wchar_t>(std::towlower(c));
+            text.erase(std::remove_if(text.begin(),text.end(),[](wchar_t c) {return std::iswspace(c)!=0;}),text.end());
+            if(text.find(search.name)!=std::wstring::npos) search.found.push_back(candidate);return TRUE;
+        },reinterpret_cast<LPARAM>(&search));
+        if(search.found.size()!=1) {status=search.found.empty()?L"Тренажёр не запущен. Откройте его, затем повторите поиск":L"Найдено несколько окон: используйте ручной выбор";return;}
+        targetWindow=search.found.front();GetWindowThreadProcessId(targetWindow,&targetProcess);refreshTargetButton();settings.center=true;syncSettings();
+        status=L"Тренажёр выбран. Начните с проверки без кликов";
     }
     void syncColor() {
         const int values[]={color.target.red,color.target.green,color.target.blue,color.channelTolerance};
         for(int i=0;i<4;++i) SetWindowTextW(colorEdits[i],std::to_wstring(values[i]).c_str());
     }
-    void disableClicks() {UnregisterHotKey(window,9);autoClick=false;gate.reset();clickStatus=L"Выключен";if(autoControl) SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);}
+    void finishClick(bool count=true) {
+        if(!syntheticDown) return;
+        syntheticDown=false;KillTimer(window,4);
+        INPUT up{};up.type=INPUT_MOUSE;up.mi.dwFlags=MOUSEEVENTF_LEFTUP;
+        const bool released=SendInput(1,&up,sizeof(INPUT))==1;
+        if(released && count) {gate.acknowledgeClick(triggerlab::Clock::now());++clickCount;clickStatus=L"Клик отправлен: нажатие и отпускание";}
+        if(!released) {SendInput(1,&up,sizeof(INPUT));autoClick=false;UnregisterHotKey(window,9);gate.reset();SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);notice=clickStatus=L"Отпускание отклонено системой; триггер выключен";}
+    }
+    void disableClicks() {finishClick(false);UnregisterHotKey(window,9);autoClick=false;gate.reset();clickStatus=L"Выключен";if(autoControl) SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);}
     void cancelSelection() {
         pickDeadline=targetDeadline=0;KillTimer(window,2);
         if(!autoClick) UnregisterHotKey(window,9);
@@ -178,20 +253,28 @@ struct Preview {
             gate.step(sample.frame.has_value() && outside,false,triggerlab::Clock::now());
             clickStatus=outside?L"Курсор вне выбранного окна":L"Выбранное окно не активно: активируйте его";return;
         }
-        const bool match=sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel,color);
+        const bool match=settings.center?mask.found:(sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel,color));
         const auto now=triggerlab::Clock::now();
         if(!gate.step(sample.frame.has_value(),match,now)) {
-            clickStatus=!match?L"Ожидаю цвет под курсором":gate.clickedHover()?L"Клик уже выполнен: уйдите с цвета и наведите снова":L"Совпадение: ожидание "+std::to_wstring(gate.elapsed(now).count())+L" / 70 мс";
+            clickStatus=!match?L"Ожидаю цвет в области обнаружения":gate.clickedHover()?L"Срабатывание выполнено: нужен уход с цвета":L"Совпадение: ожидание "+std::to_wstring(gate.elapsed(now).count())+L" / "+std::to_wstring(settings.dwellMs)+L" мс";
             return;
         }
+        if(settings.center) {
+            const auto bounds=clientBounds();
+            if(!bounds || !analyzedClient || bounds->x!=analyzedClient->x || bounds->y!=analyzedClient->y || bounds->width!=analyzedClient->width || bounds->height!=analyzedClient->height) {
+                gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Геометрия окна изменилась: ожидание сброшено";return;
+            }
+        }
+        if(settings.dryRun) {gate.acknowledgeClick(triggerlab::Clock::now());++diagnosticCount;clickStatus=L"Проверка: срабатывание без отправки клика";return;}
         POINT current{};
-        if(!GetCursorPos(&current) || current.x!=capturedCursor.x || current.y!=capturedCursor.y || !permittedAt(current) || inputHeld()) {
+        if(!GetCursorPos(&current) || (!settings.center && (current.x!=capturedCursor.x || current.y!=capturedCursor.y)) || !permittedAt(current) || !permittedAt(capturedCursor) || inputHeld()) {
             gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Ожидание прервано: курсор, окно или клавиши изменились";return;
         }
-        INPUT inputs[2]{};inputs[0].type=inputs[1].type=INPUT_MOUSE;inputs[0].mi.dwFlags=MOUSEEVENTF_LEFTDOWN;inputs[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
-        const UINT sent=SendInput(2,inputs,sizeof(INPUT));
-        if(sent==2) {gate.acknowledgeClick(triggerlab::Clock::now());++clickCount;clickStatus=L"Клик отправлен";}
-        else {const auto error=GetLastError();if(sent==1) {INPUT release{};release.type=INPUT_MOUSE;release.mi.dwFlags=MOUSEEVENTF_LEFTUP;SendInput(1,&release,sizeof(INPUT));}disableClicks();status=L"Ввод отклонён системой (код "+std::to_wstring(error)+L")";clickStatus=status;notice=status;}
+        INPUT down{};down.type=INPUT_MOUSE;down.mi.dwFlags=MOUSEEVENTF_LEFTDOWN;
+        if(SendInput(1,&down,sizeof(INPUT))==1) {
+            syntheticDown=true;releaseAt=triggerlab::Clock::now()+std::chrono::milliseconds{settings.clickMs};clickStatus=L"Нажатие выполняется";
+            if(!SetTimer(window,4,5,nullptr)) {finishClick(false);disableClicks();notice=L"Ошибка таймера отпускания: триггер выключен";}
+        } else {const auto error=GetLastError();disableClicks();status=L"Ввод отклонён системой (код "+std::to_wstring(error)+L")";clickStatus=status;notice=status;}
     }
     static bool inputHeld() {
         for(int key:{VK_CONTROL,VK_MENU,VK_SHIFT,VK_LWIN,VK_RWIN,VK_LBUTTON,VK_RBUTTON,VK_MBUTTON,VK_XBUTTON1,VK_XBUTTON2})
@@ -204,7 +287,7 @@ struct Preview {
         for(int i=0;i<3;++i) CreateWindowW(L"BUTTON",basicColors[i].name,WS_CHILD|WS_VISIBLE|WS_TABSTOP,
             365+i*105,15,100,30,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(11+i)),nullptr,nullptr);
         const wchar_t* labels[]={L"R",L"G",L"B",L"Допуск"};
-        for(int i=0;i<4;++i) {CreateWindowW(L"STATIC",labels[i],WS_CHILD|WS_VISIBLE,15+i*110,60,50,20,window,nullptr,nullptr,nullptr);colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,(i==3?410:45+i*110),57,60,24,window,nullptr,nullptr,nullptr);}
+        for(int i=0;i<4;++i) {CreateWindowW(L"STATIC",labels[i],WS_CHILD|WS_VISIBLE,20+i*110,280,90,20,window,nullptr,nullptr,nullptr);colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,20+i*110,302,85,26,window,nullptr,nullptr,nullptr);}
         CreateWindowW(L"BUTTON",L"Применить RGB",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,55,160,28,window,reinterpret_cast<HMENU>(3),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Выбрать цвет…",WS_CHILD|WS_VISIBLE|WS_TABSTOP,15,95,150,30,window,reinterpret_cast<HMENU>(4),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Пипетка (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP,180,95,170,30,window,reinterpret_cast<HMENU>(5),nullptr,nullptr);
@@ -213,9 +296,28 @@ struct Preview {
         CreateWindowW(L"BUTTON",L"Палитра / область",WS_CHILD|WS_VISIBLE|WS_TABSTOP,480,236,185,28,window,reinterpret_cast<HMENU>(14),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Окно не выбрано\nВыбрать (3 сек.)",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_MULTILINE,15,135,240,40,window,reinterpret_cast<HMENU>(7),nullptr,nullptr);
         autoControl=CreateWindowW(L"BUTTON",L"Автоклик в выбранном окне",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,270,135,350,30,window,reinterpret_cast<HMENU>(8),nullptr,nullptr);
-        syncColor();refreshTargetButton();SetTimer(window,3,500,nullptr);
+        auto move=[&](int id,int x,int y,int width,int height) {SetWindowPos(GetDlgItem(window,id),nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE);};
+        move(7,20,55,300,48);move(1,615,55,155,42);move(2,785,55,190,42);
+        move(8,640,125,340,30);SetWindowTextW(autoControl,L"Включить триггер (F9: остановить)");
+        move(3,440,302,75,28);SetWindowTextW(GetDlgItem(window,3),L"Применить");
+        for(int i=0;i<3;++i) move(11+i,520+i*155,302,145,28);
+        move(4,20,351,150,32);move(5,180,351,170,32);move(6,365,351,175,32);move(10,550,351,160,32);move(14,730,351,245,32);
+        CreateWindowW(L"STATIC",L"TriggerLab — Kovaak’s / Aimlabs | пользовательские тренировки",WS_CHILD|WS_VISIBLE,20,16,960,25,window,nullptr,nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Kovaak’s",WS_CHILD|WS_VISIBLE|WS_TABSTOP,335,55,125,42,window,reinterpret_cast<HMENU>(18),nullptr,nullptr);
+        CreateWindowW(L"BUTTON",L"Aimlabs",WS_CHILD|WS_VISIBLE|WS_TABSTOP,475,55,125,42,window,reinterpret_cast<HMENU>(19),nullptr,nullptr);
+        modeControl=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,20,125,260,150,window,reinterpret_cast<HMENU>(15),nullptr,nullptr);
+        SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Вокруг прицела окна"));SendMessageW(modeControl,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Под системным курсором"));
+        dryControl=CreateWindowW(L"BUTTON",L"Проверка без кликов",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,300,125,310,30,window,reinterpret_cast<HMENU>(16),nullptr,nullptr);
+        const wchar_t* settingLabels[]={L"ROI: нечётный",L"Игнор прицела",L"Порог, %",L"Сдвиг X",L"Сдвиг Y",L"Задержка, мс",L"Интервал, мс",L"Нажатие, мс"};
+        for(int i=0;i<8;++i) {
+            CreateWindowW(L"STATIC",settingLabels[i],WS_CHILD|WS_VISIBLE,20+i*110,177,108,20,window,nullptr,nullptr,nullptr);
+            settingEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP,20+i*110,202,95,26,window,nullptr,nullptr,nullptr);
+        }
+        CreateWindowW(L"BUTTON",L"Сохранить",WS_CHILD|WS_VISIBLE|WS_TABSTOP,895,200,100,30,window,reinterpret_cast<HMENU>(17),nullptr,nullptr);
+        CreateWindowW(L"STATIC",L"ROI 5..101; игнор < ROI/2; порог 1..100%; сдвиги −2000..2000; задержка 1..2000; интервал 50..2000",WS_CHILD|WS_VISIBLE,20,240,980,25,window,nullptr,nullptr,nullptr);
+        syncColor();syncSettings();refreshTargetButton();SetTimer(window,3,500,nullptr);
     }
-    void command(int id) {
+    void command(int id,int notification=BN_CLICKED) {
         if(id==1) {if(SetTimer(window,1,10,nullptr)) {running=true;status=L"Active / Захват активен";}else status=L"Timer failed / Ошибка таймера";}
         else if(id==2) stop();
         else if(id==3) {if(applyColor()) status=L"RGB применён; автоклик выключен";}
@@ -224,6 +326,15 @@ struct Preview {
         else if(id==6) saveColor();
         else if(id==7) beginSelection(false);
         else if(id==14) editImage();
+        else if(id==17) applySettings();
+        else if(id==18) findTrainer(L"kovaak");
+        else if(id==19) findTrainer(L"aimlab");
+        else if(id==15 || id==16) {
+            if(id==15 && notification!=CBN_SELCHANGE) return;
+            cancelSelection();disableClicks();settings.center=SendMessageW(modeControl,CB_GETCURSEL,0,0)==0;settings.dryRun=SendMessageW(dryControl,BM_GETCHECK,0,0)==BST_CHECKED;
+            sample={};mask={};analysisPoint.reset();std::string error;
+            status=triggerlab::saveAnalyzerSettings(settingsPath,settings,error)?L"Режим сохранён; включите триггер отдельно":L"Режим изменён; сохранение не удалось";
+        }
         else if(id>=11 && id<=13) {
             cancelSelection();disableClicks();color.target=basicColors[id-11].pixel;color.space=triggerlab::ColorSpace::RGB;syncColor();
             mask=sample.frame?triggerlab::makeColorMask(*sample.frame,color):triggerlab::ColorMask{};
@@ -247,8 +358,30 @@ struct Preview {
     void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};status=L"Stopped / Остановлено";notice=status;InvalidateRect(window,nullptr,FALSE);}
     void update(bool pick=false) {
         if(!running && !pick) return;
+        if(syntheticDown) {
+            if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=targetWindow) {finishClick(false);disableClicks();return;}
+            if(triggerlab::Clock::now()<releaseAt) return;
+            finishClick();
+        }
         if(pick) {cancelSelection();disableClicks();}
-        acceptSample(capture.captureCursor(),pick);
+        analysisPoint.reset();analyzedClient.reset();
+        if(pick || !settings.center) acceptSample(capture.captureCursor(),pick);
+        else {
+            const auto bounds=clientBounds();
+            const auto roi=bounds?triggerlab::aimRegion(*bounds,settings):std::optional<triggerlab::Region>{};
+            if(!roi || GetAncestor(GetForegroundWindow(),GA_ROOT)!=targetWindow) {
+                acceptSample({},false);status=!bounds?L"Выберите окно тренажёра":!roi?L"Область прицела выходит за окно; уменьшите сдвиг / ROI":L"Активируйте выбранный тренажёр";
+                clickStatus=status;
+            } else {
+                POINT center{static_cast<LONG>(roi->x+roi->width/2),static_cast<LONG>(roi->y+roi->height/2)};
+                if(!permittedAt(center)) {acceptSample({},false);status=clickStatus=L"Область прицела перекрыта другим окном";}
+                else {
+                    auto fresh=capture.capture(*roi);
+                    if(fresh.frame && (fresh.region.x!=roi->x || fresh.region.y!=roi->y || fresh.region.width!=roi->width || fresh.region.height!=roi->height)) fresh={};
+                    analyzedClient=bounds;analysisPoint=triggerlab::CapturePoint{center.x,center.y};acceptSample(std::move(fresh),false);
+                }
+            }
+        }
         if(!running) capture.reset();
     }
     void acceptSample(triggerlab::CaptureSample fresh,bool pick) {
@@ -264,18 +397,28 @@ struct Preview {
         }
         else if(sample.frame) {
             if(pick && sample.cursorPixel) {color.target=*sample.cursorPixel;color.space=triggerlab::ColorSpace::RGB;syncColor();}
-            mask=triggerlab::makeColorMask(*sample.frame,color);
-            const bool cursorMatch=sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel,color);
-            status=sample.allBlack?L"Чёрный ROI: проверьте, доступно ли содержимое окна":(cursorMatch?L"Под курсором: СОВПАДЕНИЕ":L"Под курсором: нет совпадения");
+            mask=settings.center && !pick?triggerlab::aimColorMask(*sample.frame,color,settings):triggerlab::makeColorMask(*sample.frame,color);
+            if(sample.allBlack && settings.center) mask.found=false;
+            const bool found=settings.center && !pick?mask.found:(sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel,color));
+            status=sample.allBlack?L"Чёрный ROI: содержимое окна может быть недоступно":found?L"СОВПАДЕНИЕ в области обнаружения":L"Нет совпадения";
         } else status=sample.status==triggerlab::CaptureStatus::CursorMoved?L"Курсор движется: удерживайте его на нужном цвете":L"Захват недоступен (статус "+std::to_wstring(static_cast<int>(sample.status))+L")";
-        if(autoClick && sample.cursorPosition) handleClick({sample.cursorPosition->x,sample.cursorPosition->y});
+        if(!settings.center || pick) analysisPoint=sample.cursorPosition;
+        if(autoClick && sample.frame && analysisPoint) handleClick({analysisPoint->x,analysisPoint->y});
         else if(autoClick) {gate.step(false,false,triggerlab::Clock::now());clickStatus=ownPixel?L"Курсор над анализатором":L"Нет свежего пикселя: "+status;}
         if(pick) {notice=sample.cursorPixel?L"Цвет взят с экрана. Нажмите «Сохранить цвет»":L"Пипетка: свежий пиксель недоступен, цвет не изменён";}
-        InvalidateRect(window,nullptr,FALSE);
+        if(GetTickCount64()-lastPaint>=33) {lastPaint=GetTickCount64();InvalidateRect(window,nullptr,FALSE);}
     }
     bool smokeTest(const std::filesystem::path& path) {
         if(!triggerlab::imagePaletteDialogSmoke()) return false;
         colorPath=path;
+        settingsPath=path.parent_path()/L"analyzer-settings.json";
+        const wchar_t* analyzerValues[]={L"41",L"4",L"5",L"-20",L"10",L"100",L"80",L"40"};
+        for(int i=0;i<8;++i) SetWindowTextW(settingEdits[i],analyzerValues[i]);
+        if(!applySettings()) return false;
+        const auto savedSettings=triggerlab::loadAnalyzerSettings(settingsPath);
+        if(savedSettings.side!=41 || savedSettings.offsetX!=-20 || savedSettings.dwellMs!=100 || savedSettings.cooldownMs!=80) return false;
+        SetWindowTextW(settingEdits[0],L"40");if(applySettings() || settings.side!=41) return false;
+        settings={};syncSettings();gate.setTiming(std::chrono::milliseconds{70},std::chrono::milliseconds{50});
         for(auto edit:colorEdits) if(!IsWindow(edit)) return false;
         const wchar_t* values[]={L"231",L"67",L"19",L"12"};
         for(int i=0;i<4;++i) SetWindowTextW(colorEdits[i],values[i]);
@@ -346,24 +489,28 @@ struct Preview {
     }
     void paint(HDC target,RECT rect) {
         const int w=rect.right,h=rect.bottom;if(w<=0 || h<=0) return;
-        PaintSurface surface(target,w,h);if(!surface.valid()) return;HDC dc=surface.dc;
+        if(!backBuffer || bufferWidth!=w || bufferHeight!=h) {backBuffer=std::make_unique<PaintSurface>(target,w,h);bufferWidth=w;bufferHeight=h;}
+        if(!backBuffer->valid()) return;HDC dc=backBuffer->dc;
         FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(235,235,235));
         auto text=[&](int y,const std::wstring& line) {TextOutW(dc,15,y,line.c_str(),static_cast<int>(line.size()));};
-        text(182,status);text(206,L"C: взять цвет сейчас; H: RGB/HSV; ESC / F9: остановить");
-        text(230,L"RGB: "+std::to_wstring(color.target.red)+L", "+std::to_wstring(color.target.green)+L", "+std::to_wstring(color.target.blue)+L" | "+(color.space==triggerlab::ColorSpace::RGB?L"RGB":L"HSV")+L" | coverage "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"%");
+        text(395,status);text(425,clickStatus);
+        text(455,L"Триггер: "+std::wstring(autoClick?L"ВКЛ":L"ВЫКЛ")+L" | Отправлено: "+std::to_wstring(clickCount)+L" | Проверок без кликов: "+std::to_wstring(diagnosticCount));
+        text(485,L"Окно: "+(targetWindow?targetTitle.substr(0,80):L"не выбрано"));
         if(sample.frame) {
             BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=sample.frame->width();info.bmiHeader.biHeight=-sample.frame->height();info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
-            StretchDIBits(dc,15,270,210,210,0,0,sample.frame->width(),sample.frame->height(),sample.frame->data(),&info,DIB_RGB_COLORS,SRCCOPY);
+            StretchDIBits(dc,20,530,260,260,0,0,sample.frame->width(),sample.frame->height(),sample.frame->data(),&info,DIB_RGB_COLORS,SRCCOPY);
             triggerlab::Frame maskFrame(sample.frame->width(),sample.frame->height());
             for(std::size_t i=0;i<mask.pixels.size();++i) {auto value=mask.pixels[i];maskFrame.data()[i]={value,value,value,255};}
-            StretchDIBits(dc,245,270,210,210,0,0,maskFrame.width(),maskFrame.height(),maskFrame.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+            StretchDIBits(dc,315,530,260,260,0,0,maskFrame.width(),maskFrame.height(),maskFrame.data(),&info,DIB_RGB_COLORS,SRCCOPY);
         }
-        text(515,L"Окно: "+(targetWindow?targetTitle.substr(0,65):L"не выбрано"));
-        text(490,clickStatus);
-        text(539,L"Автоклик: "+std::wstring(autoClick?L"ВКЛ":L"ВЫКЛ")+L" | Отправлено кликов: "+std::to_wstring(clickCount));
-        text(563,L"Наведение: 70 мс. Интервал: 50 мс. Один клик до ухода с цвета.");
-        text(590,notice);
-        HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{480,270,620,410};FillRect(dc,&patch,swatch);DeleteObject(swatch);
+        text(510,L"Снимок ROI                         Маска цвета (перекрестие исключено)");
+        auto sideText=[&](int y,const std::wstring& s) {TextOutW(dc,620,y,s.c_str(),static_cast<int>(s.size()));};
+        sideText(660,std::wstring(color.space==triggerlab::ColorSpace::RGB?L"RGB":L"HSV")+L" | "+std::to_wstring(color.target.red)+L", "+std::to_wstring(color.target.green)+L", "+std::to_wstring(color.target.blue));
+        sideText(690,L"Совпадение: "+std::to_wstring(static_cast<int>(mask.coverage*100))+L"% | Порог: "+std::to_wstring(settings.minimumPercent)+L"%");
+        sideText(720,settings.dryRun?L"Режим: проверка без кликов":L"Режим: реальные клики");
+        sideText(750,L"C: пипетка; H: RGB/HSV; Esc / F9: Stop");
+        text(805,notice);
+        HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{620,530,965,640};FillRect(dc,&patch,swatch);DeleteObject(swatch);
         BitBlt(target,0,0,w,h,dc,0,0,SRCCOPY);
     }
 };
@@ -373,8 +520,9 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
     try {
         switch(message) {
             case WM_CREATE:app->createControls();return 0;
-            case WM_COMMAND:app->command(LOWORD(wp));return 0;
+            case WM_COMMAND:app->command(LOWORD(wp),HIWORD(wp));return 0;
             case WM_TIMER:
+                if(wp==4) {if(triggerlab::Clock::now()>=app->releaseAt) app->finishClick();return 0;}
                 if(wp==3) {app->refreshTargetButton();return 0;}
                 if(wp==2) app->selectionTick(GetTickCount64());
                 else if(wp==1) app->update();return 0;
@@ -396,29 +544,35 @@ namespace {
 struct ClickTestTarget {
     COLORREF color=RGB(231,67,19);
     int downs=0,ups=0;
+    bool crosshair=false;
     std::vector<triggerlab::Clock::time_point> clicks;
+    std::vector<triggerlab::Clock::time_point> releases;
 };
 LRESULT CALLBACK clickTestProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) {
     if(message==WM_NCCREATE) SetWindowLongPtrW(hwnd,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
     auto* state=reinterpret_cast<ClickTestTarget*>(GetWindowLongPtrW(hwnd,GWLP_USERDATA));
     if(state && message==WM_PAINT) {
         PAINTSTRUCT ps{};HDC dc=BeginPaint(hwnd,&ps);RECT rect{};GetClientRect(hwnd,&rect);
-        SetDCBrushColor(dc,state->color);FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));EndPaint(hwnd,&ps);return 0;
+        SetDCBrushColor(dc,state->color);FillRect(dc,&rect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+        if(state->crosshair) {RECT cross{rect.right/2-3,rect.bottom/2-3,rect.right/2+4,rect.bottom/2+4};FillRect(dc,&cross,static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));}
+        EndPaint(hwnd,&ps);return 0;
     }
     if(state && message==WM_LBUTTONDOWN) {++state->downs;state->clicks.push_back(triggerlab::Clock::now());return 0;}
-    if(state && message==WM_LBUTTONUP) {++state->ups;return 0;}
+    if(state && message==WM_LBUTTONUP) {++state->ups;state->releases.push_back(triggerlab::Clock::now());return 0;}
     return DefWindowProcW(hwnd,message,wp,lp);
 }
-int liveClickTest(Preview& app) {
+int liveClickTest(Preview& app,bool centerMode=false) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
-    std::ofstream report(std::filesystem::path(executable).parent_path()/L"click-test-report.txt");
+    std::ofstream report(std::filesystem::path(executable).parent_path()/(centerMode?L"center-test-report.txt":L"click-test-report.txt"));
     POINT cursor{};
     if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: cursor unavailable or physical input held\n";return 77;}
-    HWND previous=GetForegroundWindow();ClickTestTarget state;
+    HWND previous=GetForegroundWindow();ClickTestTarget state;state.crosshair=centerMode;
     WNDCLASSW wc{};wc.hInstance=GetModuleHandleW(nullptr);wc.lpfnWndProc=clickTestProcedure;wc.lpszClassName=L"TriggerLabHoverInputTest";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
     if(!RegisterClassW(&wc) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) return 2;
-    HWND target=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab click test",WS_POPUP|WS_VISIBLE,cursor.x-60,cursor.y-60,120,120,nullptr,nullptr,wc.hInstance,&state);
+    // Center mode deliberately samples away from the physical pointer. A
+    // computer-use pointer highlight may cover the cursor but not this ROI.
+    HWND target=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab click test",WS_POPUP|WS_VISIBLE,cursor.x-(centerMode?30:60),cursor.y-(centerMode?30:60),centerMode?240:120,centerMode?240:120,nullptr,nullptr,wc.hInstance,&state);
     if(!target) {report<<"SKIP: cannot create test window\n";return 77;}
     app.targetWindow=target;GetWindowThreadProcessId(target,&app.targetProcess);
     UpdateWindow(target);
@@ -435,9 +589,16 @@ int liveClickTest(Preview& app) {
     int result=0;
     if(!app.permittedAt(cursor)) {report<<"SKIP: test window cannot receive focus\n";result=77;}
     else {
+        app.settings={};app.settings.center=centerMode;app.settings.dryRun=true;
         app.running=true;app.color.target={19,67,231,255};app.color.channelTolerance=0;app.color.space=triggerlab::ColorSpace::RGB;
+        app.gate.setTiming(70ms,50ms);
+        GdiFlush();DwmFlush();Sleep(30);pump();app.update();
+        const bool reference=centerMode?app.mask.found && app.mask.coverage==1:
+            app.sample.cursorPixel && triggerlab::matchesColor(*app.sample.cursorPixel,app.color);
+        if(!reference) app.running=false;
         SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(8);
-        if(!app.autoClick) {report<<"SKIP: F9 unavailable\n";result=77;}
+        if(!reference) {report<<"SKIP: test reference pixels unavailable or covered by a desktop/pointer overlay\n";result=77;}
+        else if(!app.autoClick) {report<<"SKIP: F9 unavailable\n";result=77;}
         else {
             auto observe=[&](std::chrono::milliseconds duration) {
                 const auto until=triggerlab::Clock::now()+duration;
@@ -448,10 +609,19 @@ int liveClickTest(Preview& app) {
                 }
                 return true;
             };
+            const auto before=app.diagnosticCount;
+            const bool dryStable=observe(250ms);
+            const bool dryPassed=dryStable && app.diagnosticCount==before+1 && state.downs==0 && state.ups==0;
+            report<<"dry_run="<<dryPassed<<" center_mode="<<centerMode<<"\n";
+            const auto p=app.sample.cursorPixel?*app.sample.cursorPixel:app.sample.frame?app.sample.frame->at(app.sample.frame->width()/2,app.sample.frame->height()/2):triggerlab::Pixel{};
+            report<<"dry rgb="<<int(p.red)<<","<<int(p.green)<<","<<int(p.blue)<<" mask="<<app.mask.coverage<<" held="<<Preview::inputHeld()<<" diagnostics="<<app.diagnosticCount<<" foreground="<<(GetForegroundWindow()==target)<<"\n";
+            const int bytes=WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),nullptr,0,nullptr,nullptr);
+            std::string reason(bytes,'\0');WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),reason.data(),bytes,nullptr,nullptr);report<<reason<<"\n";
+            app.settings.dryRun=false;app.gate.reset();
             const auto start=triggerlab::Clock::now();
             bool stable=observe(300ms);
             const auto first=state.clicks.empty()?0:std::chrono::duration_cast<std::chrono::milliseconds>(state.clicks.front()-start).count();
-            bool passed=stable && state.downs==1 && state.ups==1 && first>=70;
+            bool passed=dryPassed && stable && state.downs==1 && state.ups==1 && first>=70;
             report<<"first hover downs="<<state.downs<<" ups="<<state.ups<<" delay_ms="<<first<<"\n";
             state.color=RGB(50,50,50);InvalidateRect(target,nullptr,FALSE);UpdateWindow(target);
             stable=observe(100ms) && stable;
@@ -460,8 +630,16 @@ int liveClickTest(Preview& app) {
             const auto secondStart=triggerlab::Clock::now();stable=observe(300ms) && stable;
             const auto second=state.clicks.size()<2?0:std::chrono::duration_cast<std::chrono::milliseconds>(state.clicks[1]-secondStart).count();
             passed=passed && state.downs==2 && state.ups==2 && second>=70;
+            if(state.releases.size()==2 && state.clicks.size()==2) {
+                const auto held=std::chrono::duration_cast<std::chrono::milliseconds>(state.releases[0]-state.clicks[0]).count();
+                report<<"press_duration_ms="<<held<<"\n";passed=passed && held>=app.settings.clickMs;
+            }
             report<<"reacquire downs="<<state.downs<<" ups="<<state.ups<<" delay_ms="<<second<<"\n";
-            app.disableClicks();stable=observe(100ms) && stable;passed=passed && state.downs==2;
+            app.gate.reset();const auto holdDeadline=triggerlab::Clock::now()+500ms;
+            while(!app.syntheticDown && triggerlab::Clock::now()<holdDeadline) {app.update();pump();Sleep(5);}
+            const bool interrupted=app.syntheticDown;app.disableClicks();pump();
+            report<<"stop_released_pending_press="<<interrupted<<" downs="<<state.downs<<" ups="<<state.ups<<"\n";
+            stable=observe(100ms) && stable;passed=passed && interrupted && !app.syntheticDown && state.downs==3 && state.ups==3;
             report<<(passed?"PASS: actual SendInput received once per hover, dwell >=70ms, stop blocks input\n":stable?"FAIL: real hover input\n":"SKIP: user cursor or foreground changed during test\n");
             if(!passed) {
                 report<<"capture_status="<<static_cast<int>(app.sample.status)<<" matching="<<(app.sample.cursorPixel && triggerlab::matchesColor(*app.sample.cursorPixel,app.color))<<"\n";
@@ -478,14 +656,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR commandLine,int show) {
     try {
         Preview app;WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"TriggerLabCapturePreviewClass";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         if(!RegisterClassW(&wc)) return 1;
-        HWND window=CreateWindowW(wc.lpszClassName,L"TriggerLab — выбор цвета и автоклик",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,700,680,nullptr,nullptr,instance,&app);
+        HWND window=CreateWindowW(wc.lpszClassName,L"TriggerLab — тренировки Kovaak’s / Aimlabs",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1040,890,nullptr,nullptr,instance,&app);
         if(!window) return 1;
         if(std::wstring(commandLine)==L"--click-test") {const int result=liveClickTest(app);DestroyWindow(window);return result;}
+        if(std::wstring(commandLine)==L"--center-click-test") {const int result=liveClickTest(app,true);DestroyWindow(window);return result;}
         if(std::wstring(commandLine)==L"--smoke-test") {
             const auto path=std::filesystem::temp_directory_path()/(L"triggerlab-preview-test-"+std::to_wstring(GetCurrentProcessId()))/L"color.json";
             const bool passed=app.smokeTest(path);DestroyWindow(window);std::filesystem::remove_all(path.parent_path());return passed?0:2;
         }
-        SetWindowTextW(window,L"TriggerLab — выбор цвета и автоклик");
+        SetWindowTextW(window,L"TriggerLab — тренировки Kovaak’s / Aimlabs");
         ShowWindow(window,show);MSG message{};BOOL status;
         while((status=GetMessageW(&message,nullptr,0,0))>0) {if(GetFocus()!=window && IsDialogMessageW(window,&message)) continue;TranslateMessage(&message);DispatchMessageW(&message);}return status<0?1:0;
     } catch(const std::exception&) {return 1;}
