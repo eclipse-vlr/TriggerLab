@@ -29,6 +29,7 @@ jobs:
           path: |
             build/Release/TriggerLab.exe
             build/Release/TriggerLabCapturePreview.exe
+            build/Release/TriggerLabTrainer.exe
           if-no-files-found: error
           retention-days: 14
       - name: Package portable preview

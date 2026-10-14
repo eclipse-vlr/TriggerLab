@@ -1,7 +1,7 @@
 param(
     [string]$BuildDir = 'build-release',
     [string]$OutputDir = 'dist',
-    [string]$Version = '0.4.0-preview.1'
+    [string]$Version = '0.4.0-preview.2'
 )
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Invalid version' }
@@ -18,7 +18,7 @@ $name = "TriggerLab-$Version-windows-x64"
 $stagingPath = Join-Path $outputPath ('staging-' + [Guid]::NewGuid().ToString('N'))
 $packagePath = Join-Path $stagingPath $name
 New-Item -ItemType Directory -Path $packagePath -Force | Out-Null
-foreach ($exe in @('TriggerLabCapturePreview.exe','TriggerLab.exe')) {
+foreach ($exe in @('TriggerLab.exe','TriggerLabTrainer.exe')) {
     $source = Join-Path $buildPath "Release/$exe"
     if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing $source" }
     Copy-Item -LiteralPath $source -Destination $packagePath
