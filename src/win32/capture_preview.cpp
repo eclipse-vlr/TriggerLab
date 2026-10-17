@@ -10,6 +10,7 @@
 #include "triggerlab/ImagePaletteDialog.hpp"
 #include "triggerlab/AnalyzerSettings.hpp"
 #include "triggerlab/TrainingProfile.hpp"
+#include "ClickPulse.hpp"
 #include <cwctype>
 #include <cmath>
 #include <fstream>
@@ -106,7 +107,9 @@ struct Preview {
     std::wstring validationMessage;
     std::optional<triggerlab::TrainingProfile> profileBaseline;
     bool syntheticDown=false;
-    triggerlab::Clock::time_point releaseAt{};
+    triggerlab::ClickPulse inputPulse;
+    using PressTiming=triggerlab::ClickPulse::Result;
+    std::optional<PressTiming> lastPress;
     HWND modeControl=nullptr,dryControl=nullptr;
     std::optional<triggerlab::CapturePoint> analysisPoint;
     std::optional<triggerlab::Region> analyzedClient;
@@ -342,7 +345,7 @@ struct Preview {
         for(int id:{20,5,4,10,14}) {button(id,y);y+=48;}
         end(colorCard);
         begin(qualityCard);button(31,y);y+=48;button(32,y);y+=48;const int feedbackHeight=canvasWidth<480?288:160;put(qualityInfo,left,y,width,feedbackHeight);y+=feedbackHeight+8;end(qualityCard);
-        begin(stateCard);y+=280;end(stateCard);
+        begin(stateCard);y+=280+(canvasWidth<480?112:56);end(stateCard);
         for(auto& card:previewCards) {begin(card);y+=242;end(card);}
         footerY=y;canvasHeight=y+156;
     }
@@ -361,7 +364,7 @@ struct Preview {
         canvasWidth=narrow?std::max(220,std::max(1,availableWidth-barWidth)*96/static_cast<int>(dpi)):1102;
         for(auto& entry:controlRects) entry.placed=entry.logical;
         if(narrow) narrowControls();else {
-            canvasHeight=950-84+210;
+            canvasHeight=950-84+210+56;
         }
         placeHeader();
         if(narrow!=wasNarrow) scrollX=scrollY=0;
@@ -598,13 +601,21 @@ struct Preview {
         for(int i=0;i<4;++i) SetWindowTextW(colorEdits[i],std::to_wstring(values[i]).c_str());
         uiSync=wasSync;if(uiReady) {colorReady=true;verified=false;validationMessage.clear();displayFrame.reset();displayMask={};}
     }
+    std::wstring pressTimingText() const {
+        if(!lastPress) return L"Нажатие: ещё не измерено";
+        // This measures our SendInput call interval, not delivery to the game.
+        const auto tenths=lastPress->elapsed.count()/100;
+        return L"Нажатие: "+std::to_wstring(tenths/10)+L","+std::to_wstring(tenths%10)+L" мс (задано "+std::to_wstring(lastPress->requestedMs)+L")"+
+            (!lastPress->releaseAccepted?L" · ошибка отпускания":lastPress->interrupted?L" · прервано":L"");
+    }
     void finishClick(bool count=true) {
-        if(!syntheticDown) return;
-        syntheticDown=false;KillTimer(window,4);
-        INPUT up{};up.type=INPUT_MOUSE;up.mi.dwFlags=MOUSEEVENTF_LEFTUP;
-        const bool released=SendInput(1,&up,sizeof(INPUT))==1;
-        if(released && count) {gate.acknowledgeClick(triggerlab::Clock::now());++clickCount;clickStatus=L"Клик отправлен: нажатие и отпускание";}
-        if(!released) {SendInput(1,&up,sizeof(INPUT));autoClick=false;UnregisterHotKey(window,9);gate.reset();SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);notice=clickStatus=L"Отпускание отклонено системой; триггер выключен";}
+        if(!count) inputPulse.cancel();
+        auto completed=inputPulse.takeResult();if(!completed) return;
+        syntheticDown=false;lastPress=*completed;
+        // A pulse already released by the worker still counts if Stop arrives
+        // before the UI consumes completion. Only an actual cancellation is partial.
+        if(completed->releaseAccepted && !completed->interrupted) {gate.acknowledgeClick(completed->finishedAt);++clickCount;clickStatus=L"Клик отправлен: нажатие и отпускание";}
+        if(!completed->releaseAccepted) {autoClick=false;UnregisterHotKey(window,9);gate.reset();SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);notice=clickStatus=L"Отпускание отклонено системой; триггер выключен";}
     }
     void disableClicks() {finishClick(false);UnregisterHotKey(window,9);autoClick=false;gate.reset();clickStatus=L"Выключен";if(autoControl) SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);}
     void cancelSelection() {
@@ -796,10 +807,8 @@ struct Preview {
         if(!GetCursorPos(&current) || (!settings.center && (current.x!=capturedCursor.x || current.y!=capturedCursor.y)) || !permittedAt(current) || !permittedAt(capturedCursor) || inputHeld()) {
             gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Ожидание прервано: курсор, окно или клавиши изменились";return;
         }
-        INPUT down{};down.type=INPUT_MOUSE;down.mi.dwFlags=MOUSEEVENTF_LEFTDOWN;
-        if(SendInput(1,&down,sizeof(INPUT))==1) {
-            syntheticDown=true;releaseAt=triggerlab::Clock::now()+std::chrono::milliseconds{settings.clickMs};clickStatus=L"Нажатие выполняется";
-            if(!SetTimer(window,4,5,nullptr)) {finishClick(false);disableClicks();notice=L"Ошибка таймера отпускания: триггер выключен";}
+        if(inputPulse.start(settings.clickMs)) {
+            syntheticDown=true;clickStatus=L"Нажатие выполняется";
         } else {const auto error=GetLastError();disableClicks();status=L"Ввод отклонён системой (код "+std::to_wstring(error)+L")";clickStatus=status;notice=status;}
     }
     static bool inputHeld() {
@@ -947,8 +956,8 @@ struct Preview {
         if(!running && !pick) return;
         if(syntheticDown) {
             if(GetAncestor(GetForegroundWindow(),GA_ROOT)!=targetWindow) {finishClick(false);disableClicks();return;}
-            if(triggerlab::Clock::now()<releaseAt) return;
             finishClick();
+            if(syntheticDown) return;
         }
         if(pick) {cancelSelection();disableClicks();}
         analysisPoint.reset();analyzedClient.reset();
@@ -1105,6 +1114,14 @@ struct Preview {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"smoke-test-report.txt");
         auto fail=[&](int line) {report<<"FAIL: preview smoke at line "<<line<<'\n';return false;};
+        if(lastPress || pressTimingText().find(L"ещё не измерено")==std::wstring::npos) return fail(__LINE__);
+        lastPress=PressTiming{std::chrono::microseconds{12800},5,false,true};
+        if(pressTimingText().find(L"12,8 мс (задано 5)")==std::wstring::npos) return fail(__LINE__);
+        lastPress->interrupted=true;
+        if(pressTimingText().find(L"прервано")==std::wstring::npos) return fail(__LINE__);
+        lastPress->releaseAccepted=false;
+        if(pressTimingText().find(L"ошибка отпускания")==std::wstring::npos) return fail(__LINE__);
+        lastPress.reset();
         if(!testMessagePumpYields()) {report<<"FAIL: message pump did not yield with a continuously replenished queue\n";return false;}
         report<<"PASS: message pump yields with a continuously replenished queue\n";
         if(!triggerlab::imagePaletteDialogSmoke()) return fail(__LINE__);
@@ -1320,7 +1337,8 @@ struct Preview {
         text(y,clickStatus,p.text,56);y+=60;
         text(y,L"Клики: "+std::to_wstring(clickCount)+L"   Проверки: "+std::to_wstring(diagnosticCount),p.muted,24);y+=28;
         const auto elapsed=gate.elapsed(triggerlab::Clock::now()).count();
-        text(y,L"Задержка: "+std::to_wstring(std::min<std::int64_t>(elapsed,settings.dwellMs))+L" / "+std::to_wstring(settings.dwellMs)+L" мс",p.muted,24);
+        text(y,L"Задержка: "+std::to_wstring(std::min<std::int64_t>(elapsed,settings.dwellMs))+L" / "+std::to_wstring(settings.dwellMs)+L" мс",p.muted,24);y+=28;
+        text(y,pressTimingText(),p.muted,canvasWidth<480?112:56);
         for(int i=0;i<2;++i) {
             card(previewCards[i],i==0?L"Область прицела":L"Совпадения цвета");
             const int side=std::min(200,right-left),x=left+(right-left-side)/2,top=previewCards[i].top+58;
@@ -1390,7 +1408,7 @@ struct Preview {
         HBRUSH swatch=CreateSolidBrush(RGB(color.target.red,color.target.green,color.target.blue));RECT patch{800,482,1062,512};FillRect(dc,&patch,swatch);DeleteObject(swatch);
         card(20,602,1082,788);line(40,620,L"Проверка качества цвета",p.text,headingFont);
         const int previewDc=SaveDC(dc);OffsetViewportOrgEx(dc,0,scaled(210),nullptr);
-        card(20,602,360,882);card(380,602,720,882);card(740,602,1082,882);
+        card(20,602,360,882);card(380,602,720,882);card(740,602,1082,938);
         line(40,620,L"Область прицела",p.text,headingFont);line(400,620,L"Совпадения цвета",p.text,headingFont);
         line(760,620,L"Состояние",p.text,headingFont);
         RECT image{40,652,340,852},maskRect{400,652,700,852};SetDCBrushColor(dc,p.input);FillRect(dc,&image,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));FillRect(dc,&maskRect,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
@@ -1423,9 +1441,10 @@ struct Preview {
         track.right=track.left+static_cast<LONG>(302*std::clamp(mask.coverage,0.0,1.0));SetDCBrushColor(dc,p.accent);FillRect(dc,&track,static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
         line(40,858,displayFrame?L"Снимок: "+std::to_wstring((GetTickCount64()-displayTime)/1000)+L" сек. назад":L"Снимок появится после запуска");
         line(400,858,settings.center?L"Перекрестие исключено":L"Проверка пикселя курсора");
-        line(24,894,saveState(),settingsDirty() || colorDirty()?(settings.darkTheme?RGB(255,204,143):RGB(180,83,9)):p.muted);
-        wrapped({24,918,1062,938},notice,p.muted);
-        line(860,894,L"F9 / Esc — остановить");
+        wrapped({760,886,1062,934},pressTimingText(),p.muted);
+        line(24,950,saveState(),settingsDirty() || colorDirty()?(settings.darkTheme?RGB(255,204,143):RGB(180,83,9)):p.muted);
+        wrapped({24,974,1062,994},notice,p.muted);
+        line(860,950,L"F9 / Esc — остановить");
         RestoreDC(dc,previewDc);SelectObject(dc,oldFont);RestoreDC(dc,savedDc);paintHeader(dc,w);BitBlt(target,0,0,w,h,dc,0,0,SRCCOPY);
     }
 };
@@ -1437,7 +1456,6 @@ LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM wp,LPARAM lp) {
             case WM_CREATE:app->createControls();return 0;
             case WM_COMMAND:if(HIWORD(wp)==EN_CHANGE) app->onEditChange(reinterpret_cast<HWND>(lp));else app->command(LOWORD(wp),HIWORD(wp));return 0;
             case WM_TIMER:
-                if(wp==4) {if(triggerlab::Clock::now()>=app->releaseAt) app->finishClick();return 0;}
                 if(wp==3) {app->refreshTargetButton();app->syncActions();InvalidateRect(window,nullptr,FALSE);return 0;}
                 if(wp==2) app->selectionTick(GetTickCount64());
                 else if(wp==1) app->update();return 0;
@@ -1631,10 +1649,10 @@ int referenceCaptureTest(Preview& app) {
     report<<"PASS: focus loss, black frame, F9 cancellation, no input, unchanged display and closed-window cleanup\n";
     return 0;
 }
-int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
+int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stress=false) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
-    std::ofstream report(std::filesystem::path(executable).parent_path()/(guided?L"guided-test-report.txt":centerMode?L"center-test-report.txt":L"click-test-report.txt"));
+    std::ofstream report(std::filesystem::path(executable).parent_path()/(stress?L"pulse-test-report.txt":guided?L"guided-test-report.txt":centerMode?L"center-test-report.txt":L"click-test-report.txt"));
     report<<std::unitbuf<<"stage=setup guided="<<guided<<"\n";
     POINT cursor{};
     if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: cursor unavailable or physical input held\n";return 77;}
@@ -1697,7 +1715,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
             };
             report<<"stage=observe-diagnostic\n";
             const bool dryStable=observe(guided?1000ms:250ms,guided);
-            const bool dryPassed=dryStable && app.diagnosticCount==before+1 && state.downs==0 && state.ups==0 && (!guided || (app.verified && app.wizardStep()==3 && app.settings.dryRun));
+            const bool dryPassed=dryStable && app.diagnosticCount==before+1 && state.downs==0 && state.ups==0 && !app.lastPress && (!guided || (app.verified && app.wizardStep()==3 && app.settings.dryRun));
             report<<"dry_run="<<dryPassed<<" center_mode="<<centerMode<<"\n";
             report<<"stable="<<dryStable<<" before="<<before<<" verified="<<app.verified<<" step="<<app.wizardStep()<<" ready="<<app.colorReady<<" diagnostic_mode="<<app.settings.dryRun<<" downs="<<state.downs<<" ups="<<state.ups<<"\n";
             const auto p=app.sample.cursorPixel?*app.sample.cursorPixel:app.sample.frame?app.sample.frame->at(app.sample.frame->width()/2,app.sample.frame->height()/2):triggerlab::Pixel{};
@@ -1709,6 +1727,44 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
                 app.stop();app.targetWindow=nullptr;DestroyWindow(target);if(previous && IsWindow(previous)) SetForegroundWindow(previous);return dryStable?2:77;
             }
             const auto start=triggerlab::Clock::now();
+            if(stress) {
+                app.settings.dryRun=false;std::array<std::vector<long long>,2> measurements;
+                bool passed=true,stable=true;
+                for(int batch=0;batch<2 && passed && stable;++batch) for(int i=0;i<20 && passed && stable;++i) {
+                    app.settings.clickMs=batch==0?5:30;app.gate.reset();
+                    const auto deadline=triggerlab::Clock::now()+1500ms;
+                    const int expected=state.downs+1;
+                    while(!app.syntheticDown && app.clickCount<static_cast<std::uint64_t>(expected) && triggerlab::Clock::now()<deadline) {
+                        POINT point{};if(!GetCursorPos(&point) || !app.permittedAt(point)) {stable=false;break;}
+                        app.update();pump();Sleep(1);
+                    }
+                    if(!stable) break;
+                    if(!app.syntheticDown && app.clickCount<static_cast<std::uint64_t>(expected)) {passed=false;break;}
+                    // Reproduce the UI timer defect: no message dispatch or update.
+                    if(batch==0 && i==0) {
+                        Sleep(100);
+                        // Stop/cancel arriving after a completed pulse must not
+                        // lose its count or relabel it as an interrupted press.
+                        app.finishClick(false);
+                        if(app.lastPress) report<<"ui_stall_release_us="<<app.lastPress->elapsed.count()<<'\n';
+                    }
+                    while(app.syntheticDown && triggerlab::Clock::now()<deadline) {app.update();pump();Sleep(1);}
+                    pump();
+                    POINT point{};if(!GetCursorPos(&point) || !app.permittedAt(point)) {stable=false;break;}
+                    passed=!app.syntheticDown && app.lastPress && app.lastPress->releaseAccepted && !app.lastPress->interrupted && state.downs==expected && state.ups==expected && app.clickCount==static_cast<std::uint64_t>(expected);
+                    if(!passed) break;
+                    const auto elapsed=app.lastPress->elapsed.count();measurements[batch].push_back(elapsed);
+                    passed=elapsed>=app.settings.clickMs*1000 && (batch!=0 || i!=0 || elapsed<100000);
+                }
+                app.stop();pump();
+                for(int batch=0;batch<2;++batch) if(!measurements[batch].empty()) {
+                    auto& values=measurements[batch];std::sort(values.begin(),values.end());
+                    report<<"requested_ms="<<(batch==0?5:30)<<" samples="<<values.size()<<" min_us="<<values.front()<<" median_us="<<values[values.size()/2]<<" max_us="<<values.back()<<'\n';
+                }
+                report<<"downs="<<state.downs<<" ups="<<state.ups<<" completed="<<app.clickCount<<'\n';
+                report<<(!stable?"SKIP: cursor or foreground changed\n":passed?"PASS: pulse series, balanced input and release independent of UI pumping\n":"FAIL: pulse series or UI stall extended the press\n");
+                app.targetWindow=nullptr;DestroyWindow(target);if(previous && IsWindow(previous)) SetForegroundWindow(previous);return !stable?77:passed?0:2;
+            }
             if(guided) {report<<"stage=arm-real-input\n";app.guidedAction();}else {app.settings.dryRun=false;app.gate.reset();}
             if(guided && (!app.autoClick || app.settings.dryRun)) {
                 const auto& message=app.notice;const int count=WideCharToMultiByte(CP_UTF8,0,message.data(),static_cast<int>(message.size()),nullptr,0,nullptr,nullptr);
@@ -1720,23 +1776,78 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false) {
             const auto first=state.clicks.empty()?0:std::chrono::duration_cast<std::chrono::milliseconds>(state.clicks.front()-start).count();
             bool passed=dryPassed && stable && state.downs==1 && state.ups==1 && first>=70 && (!guided || !app.settings.dryRun);
             report<<"first hover downs="<<state.downs<<" ups="<<state.ups<<" delay_ms="<<first<<"\n";
+            auto checkTiming=[&](int requested) {
+                if(!app.lastPress) {report<<"FAIL: missing input timing\n";return false;}
+                const auto& timing=*app.lastPress;
+                report<<"send_input_requested_ms="<<timing.requestedMs<<" send_input_interval_us="<<timing.elapsed.count()<<" interrupted="<<timing.interrupted<<" release_accepted="<<timing.releaseAccepted<<'\n';
+                return timing.requestedMs==requested && timing.elapsed>=std::chrono::milliseconds{requested} && !timing.interrupted && timing.releaseAccepted;
+            };
+            passed=checkTiming(30) && passed;
             state.color=RGB(50,50,50);InvalidateRect(target,nullptr,FALSE);UpdateWindow(target);
             stable=observe(100ms) && stable;
             passed=passed && state.downs==1;
+            app.settings.clickMs=5;
             state.color=RGB(231,67,19);InvalidateRect(target,nullptr,FALSE);UpdateWindow(target);
             const auto secondStart=triggerlab::Clock::now();stable=observe(300ms) && stable;
             const auto second=state.clicks.size()<2?0:std::chrono::duration_cast<std::chrono::milliseconds>(state.clicks[1]-secondStart).count();
             passed=passed && state.downs==2 && state.ups==2 && second>=70;
+            passed=checkTiming(5) && passed;
             if(state.releases.size()==2 && state.clicks.size()==2) {
                 const auto held=std::chrono::duration_cast<std::chrono::milliseconds>(state.releases[0]-state.clicks[0]).count();
-                report<<"press_duration_ms="<<held<<"\n";passed=passed && held>=app.settings.clickMs;
+                report<<"press_duration_ms="<<held<<"\n";passed=passed && held>=30;
+                const auto secondHeld=std::chrono::duration_cast<std::chrono::microseconds>(state.releases[1]-state.clicks[1]).count();
+                report<<"second_received_press_us="<<secondHeld<<"\n";passed=passed && secondHeld>=5000;
             }
             report<<"reacquire downs="<<state.downs<<" ups="<<state.ups<<" delay_ms="<<second<<"\n";
-            app.gate.reset();const auto holdDeadline=triggerlab::Clock::now()+500ms;
+            app.settings.clickMs=150;app.gate.reset();const auto holdDeadline=triggerlab::Clock::now()+500ms;
             while(!app.syntheticDown && triggerlab::Clock::now()<holdDeadline) {app.update();pump();Sleep(5);}
             const bool interrupted=app.syntheticDown;if(guided) SendMessageW(app.window,WM_HOTKEY,9,0);else app.disableClicks();pump();
             report<<"stop_released_pending_press="<<interrupted<<" downs="<<state.downs<<" ups="<<state.ups<<"\n";
             stable=observe(100ms) && stable;passed=passed && interrupted && !app.syntheticDown && state.downs==3 && state.ups==3 && (!guided || (!app.running && !app.autoClick));
+            passed=passed && app.lastPress && app.lastPress->requestedMs==150 && app.lastPress->interrupted && app.lastPress->releaseAccepted;
+            if(app.lastPress) {
+                const auto retained=app.lastPress->elapsed;
+                app.finishClick();app.disableClicks();
+                passed=passed && app.lastPress->elapsed==retained && app.lastPress->interrupted;
+                report<<"stop_send_input_interval_us="<<retained.count()<<" timing_retained="<<(app.lastPress->elapsed==retained)<<'\n';
+            }
+            if(passed && centerMode) {
+                ClickTestTarget sentinelState;
+                HWND sentinel=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab input guard test",WS_POPUP,sceneX,sceneY,240,240,nullptr,nullptr,wc.hInstance,&sentinelState);
+                if(!sentinel) passed=false;
+                for(int stage=0;stage<2 && passed && stable;++stage) {
+                    ShowWindow(sentinel,SW_HIDE);
+                    SetWindowPos(target,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+                    SetForegroundWindow(target);pump();
+                    POINT point{};
+                    if(!GetCursorPos(&point) || !app.permittedAt(point)) {stable=false;break;}
+                    app.running=true;app.settings.dryRun=false;app.settings.clickMs=150;
+                    SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(8);
+                    if(!app.autoClick) {stable=false;break;}
+                    const auto deadline=triggerlab::Clock::now()+1000ms;
+                    while(!app.syntheticDown && triggerlab::Clock::now()<deadline) {
+                        if(!GetCursorPos(&point) || !app.permittedAt(point)) {stable=false;break;}
+                        app.update();pump();Sleep(1);
+                    }
+                    if(!stable) break;
+                    if(!app.syntheticDown) {passed=false;break;}
+                    ShowWindow(sentinel,SW_SHOWNOACTIVATE);
+                    SetWindowPos(sentinel,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+                    if(stage==1) {DestroyWindow(target);target=nullptr;}
+                    SetForegroundWindow(sentinel);
+                    if(GetForegroundWindow()!=sentinel) {stable=false;break;}
+                    app.update();pump();
+                    const bool released=app.lastPress && app.lastPress->interrupted && app.lastPress->releaseAccepted;
+                    // If a slow desktop let the complete 150 ms elapse before
+                    // the focus operation, this did not exercise cancellation.
+                    if(app.lastPress && !app.lastPress->interrupted && app.lastPress->elapsed>=150ms) {stable=false;break;}
+                    const int beforeDowns=state.downs+sentinelState.downs;
+                    Sleep(180);app.update();pump();
+                    passed=released && !app.syntheticDown && !app.autoClick && sentinelState.downs==0 && state.downs+sentinelState.downs==beforeDowns && state.ups+sentinelState.ups==beforeDowns;
+                    report<<(stage==0?"focus_loss":"target_closed")<<" released="<<released<<" trigger_off="<<!app.autoClick<<" downs="<<beforeDowns<<" ups="<<state.ups+sentinelState.ups<<" other_downs="<<sentinelState.downs<<'\n';
+                }
+                app.stop();DestroyWindow(sentinel);
+            }
             report<<(passed?"PASS: actual SendInput received once per hover, dwell >=70ms, stop blocks input\n":stable?"FAIL: real hover input\n":"SKIP: user cursor or foreground changed during test\n");
             if(!passed) {
                 report<<"capture_status="<<static_cast<int>(app.sample.status)<<" matching="<<(app.sample.cursorPixel && triggerlab::matchesColor(*app.sample.cursorPixel,app.color))<<"\n";
@@ -1753,7 +1864,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR commandLine,int show) {
     try {
         const std::wstring option(commandLine);
         const bool firstRun=option==L"--first-run-test";
-        const bool isolated=firstRun || option==L"--smoke-test" || option==L"--click-test" || option==L"--center-click-test" || option==L"--guided-click-test" || option==L"--reference-test";
+        const bool isolated=firstRun || option==L"--smoke-test" || option==L"--click-test" || option==L"--center-click-test" || option==L"--guided-click-test" || option==L"--reference-test" || option==L"--pulse-test";
         const auto testRoot=isolated?std::filesystem::temp_directory_path()/(L"triggerlab-first-run-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(triggerlab::Clock::now().time_since_epoch().count())):std::filesystem::path{};
         Preview app(testRoot);WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"TriggerLabCapturePreviewClass";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         if(!RegisterClassW(&wc)) return 1;
@@ -1764,6 +1875,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR commandLine,int show) {
             const bool passed=app.firstRunTest();DestroyWindow(window);std::filesystem::remove_all(testRoot);return passed?0:2;
         }
         if(option==L"--reference-test") {const int result=referenceCaptureTest(app);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
+        if(option==L"--pulse-test") {const int result=liveClickTest(app,true,false,true);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
         if(option==L"--guided-click-test") {const int result=liveClickTest(app,true,true);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
         if(std::wstring(commandLine)==L"--click-test") {const int result=liveClickTest(app);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
         if(std::wstring(commandLine)==L"--center-click-test") {const int result=liveClickTest(app,true);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
