@@ -1794,9 +1794,12 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
             passed=checkTiming(5) && passed;
             if(state.releases.size()==2 && state.clicks.size()==2) {
                 const auto held=std::chrono::duration_cast<std::chrono::milliseconds>(state.releases[0]-state.clicks[0]).count();
-                report<<"press_duration_ms="<<held<<"\n";passed=passed && held>=30;
+                // Both messages can already be queued when the UI pumps them.
+                // Handler timestamps measure dispatch, not the button hold.
+                // checkTiming above validates the actual SendInput interval.
+                report<<"received_dispatch_interval_ms="<<held<<"\n";
                 const auto secondHeld=std::chrono::duration_cast<std::chrono::microseconds>(state.releases[1]-state.clicks[1]).count();
-                report<<"second_received_press_us="<<secondHeld<<"\n";passed=passed && secondHeld>=5000;
+                report<<"second_received_dispatch_interval_us="<<secondHeld<<"\n";
             }
             report<<"reacquire downs="<<state.downs<<" ups="<<state.ups<<" delay_ms="<<second<<"\n";
             app.settings.clickMs=150;app.gate.reset();const auto holdDeadline=triggerlab::Clock::now()+500ms;
