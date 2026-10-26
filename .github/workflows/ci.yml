@@ -102,10 +102,32 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  portable-sanitizers:
+    name: Portable core with ASan and UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Configure instrumented Debug build
+        run: >-
+          cmake -S . -B build-sanitizers -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-sanitizers --parallel
+      - name: Test under sanitizers
+        run: ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
+
   release:
     name: Publish versioned Windows release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [windows, portable-core]
+    needs: [windows, portable-core, portable-sanitizers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

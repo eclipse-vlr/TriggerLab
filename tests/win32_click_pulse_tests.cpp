@@ -4,14 +4,17 @@
 
 namespace {
 std::atomic<int> downs=0,ups=0,upAttempts=0;
-std::atomic<bool> rejectDown=false,rejectUp=false;
+std::atomic<bool> rejectDown=false,rejectUp=false,blockUp=false;
+std::atomic<int> rejectedUps=0;
 UINT WINAPI send(UINT count,LPINPUT input,int size) {
     if(count!=1 || size!=sizeof(INPUT)) return 0;
     if(input->mi.dwFlags==MOUSEEVENTF_LEFTDOWN) {
         if(rejectDown.exchange(false)) {SetLastError(ERROR_ACCESS_DENIED);return 0;}
         ++downs;
     } else if(input->mi.dwFlags==MOUSEEVENTF_LEFTUP) {
-        ++upAttempts;if(rejectUp.exchange(false)) return 0;++ups;
+        ++upAttempts;if(blockUp || rejectUp.exchange(false)) return 0;
+        if(rejectedUps>0 && rejectedUps.fetch_sub(1)>0) return 0;
+        ++ups;
     } else return 0;
     return 1;
 }
@@ -50,8 +53,25 @@ int main() {
         check(pulse.start(30),"restart after cancellation");result=await(pulse);
         check(result && result->elapsed>=30ms && downs==ups,"cancelled callback cannot release next pulse");
     }
+    const int attempts=upAttempts;
     rejectUp=true;check(pulse.start(5),"release failure setup");result=await(pulse);
-    check(result && !result->releaseAccepted && downs==ups && upAttempts==ups+1,"failed release is retried and reported");
+    check(result && result->releaseAccepted && !pulse.pendingRelease() && downs==ups && upAttempts==attempts+2,"successful second Up is acknowledged");
+    rejectedUps=2;check(pulse.start(5),"two rejected Ups setup");result=await(pulse);
+    check(result && !result->releaseAccepted && pulse.pendingRelease() && downs==ups+1,"two failures retain pending release");
+    const int pendingDowns=downs;
+    check(!pulse.start(5) && downs==pendingDowns,"pending failed release blocks new Down");
+    pulse.cancel();result=pulse.takeResult();
+    check(result && result->releaseAccepted && result->interrupted && !pulse.pendingRelease() && downs==ups,"cancel retries pending Up after failures");
+    check(pulse.start(5),"restart after recovered release");result=await(pulse);
+    check(result && result->releaseAccepted && !result->interrupted && downs==ups,"recovered instance starts cleanly");
+    blockUp=true;check(pulse.start(5),"persistent rejection setup");result=await(pulse);
+    check(result && !result->releaseAccepted && pulse.pendingRelease(),"persistent rejection remains pending");
+    pulse.cancel();result=pulse.takeResult();
+    check(result && !result->releaseAccepted && pulse.pendingRelease() && !pulse.start(5),"failed cancellation cannot forget a Down");
+    blockUp=false;pulse.cancel();result=pulse.takeResult();
+    check(result && result->releaseAccepted && result->interrupted && !pulse.pendingRelease() && downs==ups,"recovery after persistent rejection");
+    {triggerlab::ClickPulse abandoned(send);check(abandoned.start(150),"destructor retry setup");rejectedUps=2;}
+    check(downs==ups,"destructor retries after draining callbacks");
     {triggerlab::ClickPulse abandoned(send);check(abandoned.start(150),"destructor setup");}
     check(downs==ups,"destructor releases pending button");
     std::cout<<"downs="<<downs<<" ups="<<ups<<" failures="<<failures<<'\n';
