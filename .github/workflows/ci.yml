@@ -101,3 +101,42 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  release:
+    name: Publish versioned Windows release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [windows, portable-core]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Publish ZIP and checksum after successful tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^project\(TriggerLab VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving it unchanged."
+            exit 0
+          fi
+          test -f "docs/releases/$version.md"
+          gh run download "$GITHUB_RUN_ID" --name TriggerLab-portable-preview --dir release-assets
+          archive="TriggerLab-$version-windows-x64.zip"
+          (cd release-assets && sha256sum --check "$archive.sha256")
+          gh release create "$tag" "release-assets/$archive" "release-assets/$archive.sha256" \
+            --target "$GITHUB_SHA" --title "TriggerLab $version" \
+            --notes-file "docs/releases/$version.md" --draft
+          gh release edit "$tag" --draft=false --latest
