@@ -1178,7 +1178,14 @@ struct Preview {
         SendMessageW(window,WM_HOTKEY,9,0);
         if(syntheticDown || inputPulse.pendingRelease() || recoveryUps!=1 || clickCount!=0) return false;
         if(!lastPress || !lastPress->releaseAccepted || !lastPress->interrupted) return false;
-        std::cout<<"PASS: failed Up remains pending, blocks Down and recovers through Stop/F9\n";
+        // Recovery must also work after Stop killed the capture timer.
+        rejectRecoveryUp=true;autoClick=true;running=true;
+        if(!inputPulse.start(150)) return false;
+        syntheticDown=true;stop();
+        if(running || autoClick || !syntheticDown) return false;
+        rejectRecoveryUp=false;SendMessageW(window,WM_TIMER,3,0);
+        if(syntheticDown || inputPulse.pendingRelease() || recoveryDowns!=2 || recoveryUps!=2 || clickCount!=0) return false;
+        std::cout<<"PASS: failed Up remains pending, blocks Down and recovers through Stop/F9 and the service timer\n";
         return true;
     }
     bool windowPickerTest() {
@@ -1954,12 +1961,22 @@ int referenceCaptureTest(Preview& app) {
     // A foreign strip leaves the center point exposed but contaminates the
     // analysis ROI. It must not verify a match or replace a saved reference.
     if(!activate()) return skip("partial-overlay focus unavailable");
-    cleanup.blocker=CreateWindowExW(WS_EX_TOPMOST|WS_EX_NOACTIVATE,L"STATIC",L"",WS_POPUP|WS_VISIBLE,
+    cleanup.blocker=CreateWindowExW(WS_EX_TOPMOST|WS_EX_NOACTIVATE,L"STATIC",L"",WS_POPUP,
         static_cast<int>(roi->x),static_cast<int>(roi->y),1,static_cast<int>(roi->height),nullptr,nullptr,wc.hInstance,nullptr);
     if(!cleanup.blocker) return fail("partial-overlay fixture unavailable");
+    ShowWindow(cleanup.blocker,SW_SHOWNOACTIVATE);
     SetWindowPos(cleanup.blocker,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    UpdateWindow(cleanup.blocker);GdiFlush();DwmFlush();Sleep(40);pump();
     const POINT center{static_cast<LONG>(roi->x+roi->width/2),static_cast<LONG>(roi->y+roi->height/2)};
-    if(!app.permittedAt(center) || app.permittedRegion(*roi)) return fail("partial overlap bypassed ROI guard");
+    if(!app.permittedAt(center) || app.permittedRegion(*roi)) {
+        RECT r{};GetWindowRect(cleanup.blocker,&r);DWORD cloaked=0;
+        DwmGetWindowAttribute(cleanup.blocker,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
+        std::cerr<<"partial_overlay center_permitted="<<app.permittedAt(center)
+            <<" region_permitted="<<app.permittedRegion(*roi)<<" visible="<<IsWindowVisible(cleanup.blocker)
+            <<" cloaked="<<cloaked<<" bounds="<<r.left<<','<<r.top<<','<<r.right<<','<<r.bottom
+            <<" roi="<<roi->x<<','<<roi->y<<','<<roi->width<<','<<roi->height<<'\n';
+        return fail("partial overlap bypassed ROI guard");
+    }
     app.running=true;app.autoClick=true;app.settings.dryRun=true;app.update();
     if(app.sample.frame || app.verified || app.diagnosticCount || state.downs || state.ups) return fail("partial overlap entered detection/input");
     app.stop();DestroyWindow(cleanup.blocker);cleanup.blocker=nullptr;
