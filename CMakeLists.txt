@@ -133,3 +133,10 @@ if(TRIGGERLAB_BUILD_TESTS)
         set_tests_properties(triggerlab_gui_smoke PROPERTIES TIMEOUT 15)
     endif()
 endif()
+
+# Audit branch only: inspect application commands with an inert input sender.
+if(WIN32 AND TRIGGERLAB_BUILD_TESTS)
+    add_executable(TriggerLabAuditProbe tests/audit_arming_probe.cpp src/win32/ImagePaletteDialog.cpp src/win32/WindowPickerDialog.cpp)
+    target_compile_definitions(TriggerLabAuditProbe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(TriggerLabAuditProbe PRIVATE triggerlab_capture user32 gdi32 comdlg32 msimg32 dwmapi comctl32 uxtheme)
+endif()
