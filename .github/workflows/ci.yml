@@ -16,18 +16,28 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Build, test and launch through Windows batch script
-        shell: cmd
-        run: |
-          call build-windows.bat <nul
-          if errorlevel 1 exit /b 1
-      - name: Verify launched application window
+      - name: Build, test and verify batch-launched window
         shell: pwsh
         run: |
+          & $env:ComSpec /d /c 'call build-windows.bat <nul'
+          if ($LASTEXITCODE -ne 0) { throw "Batch script failed: $LASTEXITCODE" }
           $executable = Join-Path $env:GITHUB_WORKSPACE 'build\Release\TriggerLab.exe'
           $apps = @(Get-Process -Name TriggerLab -ErrorAction SilentlyContinue |
             Where-Object { $_.Path -eq $executable })
           if ($apps.Count -ne 1) {
+            Get-Process | Where-Object { $_.ProcessName -like '*TriggerLab*' } |
+              Format-List Id, ProcessName, Path, MainWindowHandle
+            $probe = Start-Process -FilePath $executable -WorkingDirectory (Split-Path $executable) -PassThru
+            try {
+              if ($probe.WaitForExit(5000)) {
+                Write-Host "Direct launch exit code: $($probe.ExitCode)"
+              } else {
+                $probe.Refresh()
+                Write-Host "Direct launch remains alive: PID=$($probe.Id), HWND=$($probe.MainWindowHandle)"
+              }
+            } finally {
+              if (-not $probe.HasExited) { Stop-Process -Id $probe.Id -Force }
+            }
             throw "Expected one TriggerLab process launched by build-windows.bat; found $($apps.Count)."
           }
           $app = $apps[0]
