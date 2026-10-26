@@ -1887,8 +1887,8 @@ int referenceCaptureTest(Preview& app) {
             if(restore && previous && IsWindow(previous)) SetForegroundWindow(previous);
         }
     } cleanup{app,target,previous};
-    auto fail=[&](const char* reason) {report<<"FAIL: "<<reason<<'\n';return 2;};
-    auto skip=[&](const char* reason) {report<<"SKIP: "<<reason<<'\n';return 77;};
+    auto fail=[&](const char* reason) {report<<"FAIL: "<<reason<<'\n';std::cerr<<"FAIL: "<<reason<<'\n';return 2;};
+    auto skip=[&](const char* reason) {report<<"SKIP: "<<reason<<'\n';std::cout<<"SKIP: "<<reason<<'\n';return 77;};
     auto pump=[] {MSG msg{};while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&msg);DispatchMessageW(&msg);}};
     auto activate=[&] {
         const DWORD foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),nullptr),thread=GetCurrentThreadId();
@@ -1963,7 +1963,7 @@ int referenceCaptureTest(Preview& app) {
     app.running=true;app.autoClick=true;app.settings.dryRun=true;app.update();
     if(app.sample.frame || app.verified || app.diagnosticCount || state.downs || state.ups) return fail("partial overlap entered detection/input");
     app.stop();DestroyWindow(cleanup.blocker);cleanup.blocker=nullptr;
-    report<<"PASS: partial ROI overlay blocks detection with an exposed center\\n";
+    report<<"PASS: partial ROI overlay blocks detection with an exposed center\n";
     auto sameTarget=[&] {
         if(!app.targetReference || app.targetReference->width()!=retained.width() || app.targetReference->height()!=retained.height()) return false;
         for(int row=0;row<retained.height();++row) for(int col=0;col<retained.width();++col) {
