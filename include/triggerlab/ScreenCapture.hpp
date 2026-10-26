@@ -14,6 +14,8 @@ struct CaptureSample {
     std::optional<Pixel> cursorPixel; // real cursor pixel; absent on failure or non-cursor capture
     bool allBlack=false; // may be legitimate black pixels or protected content
 };
+// Windows-only: reject any visible top-level overlap across the entire client ROI.
+bool isWindowRegionVisible(std::uintptr_t window,Region region) noexcept;
 // Windows-only implementation. Single-thread owned; construction does not capture.
 class ScreenCapture {
 public:

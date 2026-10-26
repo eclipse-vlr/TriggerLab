@@ -28,7 +28,9 @@ public:
     ClickPulse& operator=(const ClickPulse&)=delete;
     ~ClickPulse() {
         cancel();
-        if(wait_) {SetThreadpoolWait(wait_,nullptr,nullptr);WaitForThreadpoolWaitCallbacks(wait_,TRUE);CloseThreadpoolWait(wait_);}
+        if(wait_) {SetThreadpoolWait(wait_,nullptr,nullptr);WaitForThreadpoolWaitCallbacks(wait_,TRUE);CloseThreadpoolWait(wait_);wait_=nullptr;}
+        // Retry once more after draining callbacks; never wait indefinitely on OS rejection.
+        cancel();
         if(timer_) CloseHandle(timer_);
     }
     bool start(int milliseconds) {
@@ -43,7 +45,7 @@ public:
         INPUT input{};input.type=INPUT_MOUSE;input.mi.dwFlags=MOUSEEVENTF_LEFTDOWN;
         started_=Clock::now();
         if(sender_(1,&input,sizeof(INPUT))!=1) return false;
-        down_=true;requested_=milliseconds;
+        down_=true;interrupted_=false;requested_=milliseconds;
         LARGE_INTEGER due{};due.QuadPart=-static_cast<LONGLONG>(milliseconds)*10000;
         if(!SetWaitableTimer(timer_,&due,0,nullptr,nullptr,FALSE)) {
             const auto error=GetLastError();release(true);SetLastError(error);return false;
@@ -55,6 +57,9 @@ public:
         if(wait_) SetThreadpoolWait(wait_,nullptr,nullptr);
         if(timer_) CancelWaitableTimer(timer_);
         release(true);
+    }
+    bool pendingRelease() {
+        std::lock_guard lock(mutex_);return down_;
     }
     std::optional<Result> takeResult() {
         std::lock_guard lock(mutex_);
@@ -69,16 +74,19 @@ private:
         if(!down_) return;
         INPUT input{};input.type=INPUT_MOUSE;input.mi.dwFlags=MOUSEEVENTF_LEFTUP;
         const auto upAt=Clock::now();
-        const bool accepted=sender_(1,&input,sizeof(INPUT))==1;
-        if(!accepted) sender_(1,&input,sizeof(INPUT));
-        down_=false;
-        result_=Result{std::chrono::duration_cast<std::chrono::microseconds>(upAt-started_),requested_,interrupted,accepted,Clock::now()};
+        bool accepted=sender_(1,&input,sizeof(INPUT))==1;
+        if(!accepted) accepted=sender_(1,&input,sizeof(INPUT))==1;
+        interrupted_=interrupted_ || interrupted || !accepted;
+        // A failed Up does not complete the pulse. Block new Downs and retain
+        // ownership so cancel/Stop can retry after the OS accepts input again.
+        if(accepted) down_=false;
+        result_=Result{std::chrono::duration_cast<std::chrono::microseconds>(upAt-started_),requested_,interrupted_,accepted,Clock::now()};
     }
     Sender sender_;
     HANDLE timer_=nullptr;
     PTP_WAIT wait_=nullptr;
     std::mutex mutex_;
-    bool down_=false;
+    bool down_=false,interrupted_=false;
     int requested_=0;
     Clock::time_point started_{};
     std::optional<Result> result_;

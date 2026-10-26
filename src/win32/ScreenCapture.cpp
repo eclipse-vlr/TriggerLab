@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <dwmapi.h>
 #include "triggerlab/ScreenCapture.hpp"
 #include <cwchar>
 #include <new>
@@ -24,6 +25,36 @@ bool desktopAvailable() noexcept {
         std::wcscmp(inputName,threadName)==0;
     CloseDesktop(input); return ok;
 }
+}
+bool isWindowRegionVisible(std::uintptr_t selected,Region region) noexcept {
+    const auto window=reinterpret_cast<HWND>(selected);
+    if(!window || !IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || !validRegion(region)) return false;
+    DpiScope dpi;if(!dpi.previous) return false;
+    RECT client{};POINT origin{};
+    if(!GetClientRect(window,&client) || !ClientToScreen(window,&origin) ||
+       region.x<origin.x || region.y<origin.y ||
+       region.x+region.width>static_cast<std::int64_t>(origin.x)+client.right ||
+       region.y+region.height>static_cast<std::int64_t>(origin.y)+client.bottom) return false;
+    struct Check {HWND selected;RECT area;bool reached=false,blocked=false;};
+    Check check{window,{static_cast<LONG>(region.x),static_cast<LONG>(region.y),
+        static_cast<LONG>(region.x+region.width),static_cast<LONG>(region.y+region.height)}};
+    // EnumWindows visits top-level windows in Z order. Only visible windows
+    // above the selected source can contaminate a desktop BitBlt.
+    EnumWindows([](HWND candidate,LPARAM parameter)->BOOL {
+        auto& check=*reinterpret_cast<Check*>(parameter);
+        if(candidate==check.selected) {check.reached=true;return FALSE;}
+        if(!IsWindowVisible(candidate) || IsIconic(candidate)) return TRUE;
+        DWORD cloaked=0;
+        if(SUCCEEDED(DwmGetWindowAttribute(candidate,DWMWA_CLOAKED,&cloaked,sizeof(cloaked))) && cloaked) return TRUE;
+        RECT bounds{},overlap{};
+        if(!GetWindowRect(candidate,&bounds) || IntersectRect(&overlap,&bounds,&check.area)) {
+            check.blocked=true;return FALSE;
+        }
+        return TRUE;
+    },reinterpret_cast<LPARAM>(&check));
+    // Fail closed for a disappeared source or unknown visibility. Bounding
+    // rectangles deliberately also reject translucent/click-through overlays.
+    return check.reached && !check.blocked && IsWindow(window);
 }
 struct ScreenCapture::Impl {
     HDC dc=nullptr; HBITMAP bitmap=nullptr; HGDIOBJ previous=nullptr;
