@@ -1,7 +1,7 @@
 param(
     [string]$BuildDir = 'build-release',
     [string]$OutputDir = 'dist',
-    [string]$Version = '0.4.0-preview.3'
+    [string]$Version = '0.4.1'
 )
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Invalid version' }
@@ -30,7 +30,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/trainer-validation.md') -Desti
 $revision = & git -C $repoRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read Git revision' }
 $dirty = [bool](& git -C $repoRoot status --porcelain)
-$manifest = "version=$Version`nrevision=$revision`nsource_dirty=$dirty`nplatform=windows-x64`nruntime=static-msvc`nchannel=preview`n"
+$manifest = "version=$Version`nrevision=$revision`nsource_dirty=$dirty`nplatform=windows-x64`nruntime=static-msvc`nchannel=stable`n"
 [IO.File]::WriteAllText((Join-Path $packagePath 'VERSION.txt'),$manifest,[Text.UTF8Encoding]::new($false))
 $checksums = Get-ChildItem -LiteralPath $packagePath -File | Sort-Object Name | ForEach-Object {
     $digest = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256

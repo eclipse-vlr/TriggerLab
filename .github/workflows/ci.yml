@@ -16,18 +16,51 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Configure MSVC x64
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-      - name: Build Release
-        run: cmake --build build --config Release --parallel
-      - name: Test core, configuration and Win32 window
-        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Build, test and verify batch-launched window
+        shell: pwsh
+        run: |
+          & $env:ComSpec /d /c 'call build-windows.bat <nul'
+          if ($LASTEXITCODE -ne 0) { throw "Batch script failed: $LASTEXITCODE" }
+          $executable = Join-Path $env:GITHUB_WORKSPACE 'build\Release\TriggerLab.exe'
+          $apps = @(Get-Process -Name TriggerLab -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $executable })
+          if ($apps.Count -ne 1) {
+            Get-Process | Where-Object { $_.ProcessName -like '*TriggerLab*' } |
+              Format-List Id, ProcessName, Path, MainWindowHandle
+            $probe = Start-Process -FilePath $executable -WorkingDirectory (Split-Path $executable) -PassThru
+            try {
+              if ($probe.WaitForExit(5000)) {
+                Write-Host "Direct launch exit code: $($probe.ExitCode)"
+              } else {
+                $probe.Refresh()
+                Write-Host "Direct launch remains alive: PID=$($probe.Id), HWND=$($probe.MainWindowHandle)"
+              }
+            } finally {
+              if (-not $probe.HasExited) { Stop-Process -Id $probe.Id -Force }
+            }
+            throw "Expected one TriggerLab process launched by build-windows.bat; found $($apps.Count)."
+          }
+          $app = $apps[0]
+          try {
+            if (-not $app.WaitForInputIdle(10000)) {
+              throw 'TriggerLab did not finish window initialization.'
+            }
+            Start-Sleep -Seconds 3
+            $app.Refresh()
+            if ($app.HasExited -or $app.MainWindowHandle -eq 0) {
+              throw 'TriggerLab exited or did not create a main window.'
+            }
+            Write-Host "PASS: build-windows.bat launched a live GUI window (PID $($app.Id))."
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
       - name: Upload test diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: TriggerLab-test-diagnostics
           path: |
+            build-windows.log
             build/Testing/Temporary/LastTest.log
             build/Release/*test-report.txt
           if-no-files-found: warn
@@ -68,3 +101,42 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  release:
+    name: Publish versioned Windows release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [windows, portable-core]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Publish ZIP and checksum after successful tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -nE 's/^project\(TriggerLab VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
+          test -n "$version"
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving it unchanged."
+            exit 0
+          fi
+          test -f "docs/releases/$version.md"
+          gh run download "$GITHUB_RUN_ID" --name TriggerLab-portable-preview --dir release-assets
+          archive="TriggerLab-$version-windows-x64.zip"
+          (cd release-assets && sha256sum --check "$archive.sha256")
+          gh release create "$tag" "release-assets/$archive" "release-assets/$archive.sha256" \
+            --target "$GITHUB_SHA" --title "TriggerLab $version" \
+            --notes-file "docs/releases/$version.md" --draft
+          gh release edit "$tag" --draft=false --latest
