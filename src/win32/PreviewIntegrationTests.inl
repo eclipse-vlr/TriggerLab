@@ -269,7 +269,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
                 app.settings.dryRun=false;std::array<std::vector<long long>,2> measurements;
                 bool passed=true,stable=true;
                 for(int batch=0;batch<2 && passed && stable;++batch) for(int i=0;i<20 && passed && stable;++i) {
-                    app.settings.clickMs=batch==0?5:30;app.gate.reset();
+                    app.settings.clickMs=batch==0?5:30;app.syncSettings();app.savedSettings=app.settings;app.verified=true;app.gate.reset();
                     const auto deadline=triggerlab::Clock::now()+1500ms;
                     const int expected=state.downs+1;
                     while(!app.syntheticDown && app.clickCount<static_cast<std::uint64_t>(expected) && triggerlab::Clock::now()<deadline) {

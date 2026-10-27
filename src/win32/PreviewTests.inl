@@ -1,4 +1,19 @@
     bool inputRecoveryTest() {
+        // The advanced command must enforce the same policy as the wizard.
+        targetWindow=window;targetProcess=GetCurrentProcessId();running=true;
+        settings.dryRun=false;colorReady=false;verified=false;
+        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
+        if(autoClick || syntheticDown) return false;
+        colorReady=true;verified=true;
+        SetWindowTextW(settingEdits[0],L"invalid");running=true;
+        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
+        if(autoClick || syntheticDown) return false;
+        syncSettings();color.space=triggerlab::ColorSpace::HSV;syncActions();
+        if(IsWindowEnabled(colorEdits[3])) return false;
+        color.space=triggerlab::ColorSpace::RGB;syncActions();
+        if(!IsWindowEnabled(colorEdits[3])) return false;
+        stop();targetWindow=nullptr;targetProcess=0;
+
         recoveryDowns=0;recoveryUps=0;rejectRecoveryUp=true;
         running=true;autoClick=true;
         if(!inputPulse.start(5)) return false;
