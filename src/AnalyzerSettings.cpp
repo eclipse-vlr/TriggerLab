@@ -49,13 +49,15 @@ AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path& path) {
     try {
         std::ifstream in(path,std::ios::binary);if(!in) return {};
         std::string text(8193,'\0');in.read(text.data(),static_cast<std::streamsize>(text.size()));
-        if(in.bad() || in.gcount()>8192) return {};text.resize(static_cast<std::size_t>(in.gcount()));
+        if(in.bad() || in.gcount()>8192) return {};
+        text.resize(static_cast<std::size_t>(in.gcount()));
         std::size_t p=0;std::map<std::string,int> values;
         auto ws=[&] {while(p<text.size() && (text[p]==' ' || text[p]=='\n' || text[p]=='\r' || text[p]=='\t')) ++p;};
         auto take=[&](char c) {ws();if(p<text.size() && text[p]==c) {++p;return true;}return false;};
         if(!take('{')) return {};
         for(;;) {
-            if(!take('"')) return {};const auto start=p;
+            if(!take('"')) return {};
+            const auto start=p;
             while(p<text.size() && ((text[p]>='a' && text[p]<='z') || text[p]=='_')) ++p;
             const std::string key=text.substr(start,p-start);if(p>=text.size() || text[p++]!='"' || !take(':')) return {};
             ws();const auto n=p;if(p<text.size() && text[p]=='-') ++p;
@@ -63,7 +65,8 @@ AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path& path) {
             if(text[p]=='0') ++p;else while(p<text.size() && text[p]>='0' && text[p]<='9') ++p;
             int number=0;auto parsed=std::from_chars(text.data()+n,text.data()+p,number);
             if(parsed.ec!=std::errc{} || parsed.ptr!=text.data()+p || !values.emplace(key,number).second) return {};
-            if(take('}')) break;if(!take(',')) return {};
+            if(take('}')) break;
+            if(!take(',')) return {};
         }
         ws();if(p!=text.size() || values.size()!=10+static_cast<std::size_t>(values.contains("click_ms"))+static_cast<std::size_t>(values.contains("dark_theme"))+static_cast<std::size_t>(values.contains("advanced_mode"))) return {};
         for(auto key:{"schema_version","center","dry_run","side","ignore_radius","minimum_percent","offset_x","offset_y","dwell_ms","cooldown_ms"}) if(!values.contains(key)) return {};
@@ -72,7 +75,8 @@ AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path& path) {
         if(values.contains("click_ms")) s.clickMs=values["click_ms"];
         if(values.contains("dark_theme")) {if(values["dark_theme"]<0 || values["dark_theme"]>1) return {};s.darkTheme=values["dark_theme"]==1;}
         if(values.contains("advanced_mode")) {if(values["advanced_mode"]<0 || values["advanced_mode"]>1) return {};s.advancedMode=values["advanced_mode"]==1;}
-        if(!validAnalyzerSettings(s)) return {};return s;
+        if(!validAnalyzerSettings(s)) return {};
+        return s;
     } catch(const std::exception&) {return {};}
 }
 bool saveAnalyzerSettings(const std::filesystem::path& path,const AnalyzerSettings& s,std::string& error) {

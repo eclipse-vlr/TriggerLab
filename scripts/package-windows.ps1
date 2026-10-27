@@ -1,11 +1,16 @@
 param(
     [string]$BuildDir = 'build-release',
     [string]$OutputDir = 'dist',
-    [string]$Version = '0.4.2'
+    [string]$Version = ''
 )
 $ErrorActionPreference = 'Stop'
-if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Invalid version' }
+if ($Version -and $Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Invalid version' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$project = Get-Content -LiteralPath (Join-Path $repoRoot 'CMakeLists.txt') -Raw
+if ($project -notmatch 'project\(TriggerLab VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)') { throw 'Cannot read project version' }
+$projectVersion = $Matches[1]
+if (!$Version) { $Version = $projectVersion }
+if ($Version -ne $projectVersion) { throw 'Package version does not match CMake' }
 $buildPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $BuildDir))
 $cache = Get-Content -LiteralPath (Join-Path $buildPath 'CMakeCache.txt') -Raw
 if ($cache -notmatch 'TRIGGERLAB_STATIC_RUNTIME:BOOL=ON' -or $cache -notmatch 'CMAKE_GENERATOR_PLATFORM:INTERNAL=x64') {
@@ -24,7 +29,9 @@ foreach ($exe in @('TriggerLab.exe','TriggerLabTrainer.exe')) {
     Copy-Item -LiteralPath $source -Destination $packagePath
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE.txt') -Destination $packagePath
-Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/QUICKSTART-RU.txt') -Destination (Join-Path $packagePath 'README.txt')
+$quickstart = Get-Content -LiteralPath (Join-Path $repoRoot 'docs/QUICKSTART-RU.txt') -Raw
+$quickstart = $quickstart.Replace('@VERSION@',$Version)
+[IO.File]::WriteAllText((Join-Path $packagePath 'README.txt'),$quickstart,[Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Destination $packagePath
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/trainer-validation.md') -Destination $packagePath
 $revision = & git -C $repoRoot rev-parse HEAD

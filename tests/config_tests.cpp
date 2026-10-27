@@ -48,8 +48,8 @@ int main() {
     Settings invalid=s; invalid.detector.minimumCoverage=std::numeric_limits<double>::quiet_NaN();
     check(!saveSettings(path,invalid,error) && !error.empty(),"invalid settings save rejected");
     check(serializeSettings(loadSettings(path).settings)==json,"failed save preserves previous file");
-    std::filesystem::create_directory(path.string()+".tmp");
-    check(!saveSettings(path,Settings{},error),"unwritable temporary path rejected");
+    {std::ofstream blocked(dir/"blocked");blocked<<"file";}
+    check(!saveSettings(dir/"blocked"/"settings.json",Settings{},error),"unwritable temporary path rejected");
     check(serializeSettings(loadSettings(path).settings)==json,"write failure preserves previous file");
     {std::ofstream out(path); out<<"broken";} check(!loadSettings(path).ok,"corrupted file");
     {std::ofstream out(path); out<<std::string(65537,' ');} check(!loadSettings(path).ok,"oversize file");
