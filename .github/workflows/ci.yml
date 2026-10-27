@@ -101,6 +101,8 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Verify release recovery
+        run: python3 tests/release_workflow_tests.py
 
   portable-sanitizers:
     name: Portable core with ASan and UBSan
@@ -146,19 +148,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          set -euo pipefail
-          version=$(sed -nE 's/^project\(TriggerLab VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES CXX\)$/\1/p' CMakeLists.txt)
-          test -n "$version"
-          tag="v$version"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; leaving it unchanged."
-            exit 0
-          fi
-          test -f "docs/releases/$version.md"
-          gh run download "$GITHUB_RUN_ID" --name TriggerLab-portable-preview --dir release-assets
-          archive="TriggerLab-$version-windows-x64.zip"
-          (cd release-assets && sha256sum --check "$archive.sha256")
-          gh release create "$tag" "release-assets/$archive" "release-assets/$archive.sha256" \
-            --target "$GITHUB_SHA" --title "TriggerLab $version" \
-            --notes-file "docs/releases/$version.md" --draft
-          gh release edit "$tag" --draft=false --latest
+          bash .github/scripts/publish-release.sh

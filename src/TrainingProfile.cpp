@@ -22,7 +22,8 @@ std::optional<TrainingProfile> loadTrainingProfile(const std::filesystem::path& 
     try {
         std::ifstream file(path,std::ios::binary);if(!file) return {};
         std::string data(4097,'\0');file.read(data.data(),static_cast<std::streamsize>(data.size()));
-        if(file.bad() || file.gcount()>4096) return {};data.resize(static_cast<std::size_t>(file.gcount()));
+        if(file.bad() || file.gcount()>4096) return {};
+        data.resize(static_cast<std::size_t>(file.gcount()));
         std::istringstream input(data);input.imbue(std::locale::classic());std::string magic;
         TrainingProfile profile;int center=0,space=0,r=0,g=0,b=0;
         if(!std::getline(input,magic) || magic!="TriggerLab training profile 1" || !std::getline(input,profile.name) || !validName(profile.name)) return {};
@@ -32,7 +33,8 @@ std::optional<TrainingProfile> loadTrainingProfile(const std::filesystem::path& 
         input>>std::ws;if(!input.eof() || center<0 || center>1 || space<0 || space>1 || r<0 || r>255 || g<0 || g>255 || b<0 || b>255) return {};
         s.center=center==1;s.dryRun=true;c.space=space==0?ColorSpace::RGB:ColorSpace::HSV;
         c.target={static_cast<std::uint8_t>(b),static_cast<std::uint8_t>(g),static_cast<std::uint8_t>(r),255};
-        if(!validAnalyzerSettings(s) || !validColorConfig(c)) return {};return profile;
+        if(!validAnalyzerSettings(s) || !validColorConfig(c)) return {};
+        return profile;
     } catch(const std::exception&) {return {};}
 }
 bool saveTrainingProfile(const std::filesystem::path& directory,const TrainingProfile& profile,std::string& error) {

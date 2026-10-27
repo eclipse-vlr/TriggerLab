@@ -1,5 +1,7 @@
 #include "triggerlab/Config.hpp"
 #include <charconv>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -72,7 +74,7 @@ ConfigResult deserializeSettings(std::string_view json) {
     for (auto key : {"minimum_red","minimum_blue","maximum_green"}) if (values[key]>255) return fail();
     const bool hasScene=values.contains("scene_profile");
     const bool hasLanguage=values.contains("language");
-    if(hasScene!=values.contains("scene_speed") || values.size()!=7+(hasScene?2:0)+(hasLanguage?1:0)) return fail();
+    if(hasScene!=values.contains("scene_speed") || values.size()!=std::size_t{7}+(hasScene?2u:0u)+(hasLanguage?1u:0u)) return fail();
     Settings s;
     if(hasLanguage) {
         const auto language=values["language"];
@@ -104,24 +106,41 @@ ConfigResult loadSettings(const std::filesystem::path& path) {
     } catch (const std::exception&) { return {{},false,"Configuration read error; defaults applied"}; }
 }
 bool writeAtomicTextFile(const std::filesystem::path& path,const std::string& data,std::string& error) {
-    auto temporary=path; temporary += ".tmp";
+    std::filesystem::path directory;
+    bool owned=false;
     try {
-        if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
-        { std::ofstream out(temporary,std::ios::binary|std::ios::trunc);
-          out.write(data.data(),static_cast<std::streamsize>(data.size())); out.flush();
-          if (!out) throw std::runtime_error("Cannot write temporary settings file");
-          out.close(); if (!out) throw std::runtime_error("Cannot close settings file"); }
+        if(!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
+        static std::atomic<unsigned long long> sequence{0};
+        for(int attempt=0;attempt<64 && !owned;++attempt) {
+            directory=path;
+            directory += ".tmp-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
+            owned=std::filesystem::create_directory(directory);
+        }
+        if(!owned) throw std::runtime_error("Cannot reserve temporary settings directory");
+        const auto temporary=directory/"data";
+        {
+            std::ofstream out(temporary,std::ios::binary|std::ios::trunc);
+            out.write(data.data(),static_cast<std::streamsize>(data.size()));
+            out.flush();
+            if(!out) throw std::runtime_error("Cannot write temporary settings file");
+            out.close();
+            if(!out) throw std::runtime_error("Cannot close settings file");
+        }
 #ifdef _WIN32
-        if (!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+        if(!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
             throw std::runtime_error("Cannot replace settings file");
 #else
         std::filesystem::rename(temporary,path);
 #endif
-        error.clear(); return true;
-    } catch (const std::exception& e) {
-        error=e.what(); std::error_code ignored; std::filesystem::remove(temporary,ignored); return false;
+        std::error_code ignored;std::filesystem::remove(directory,ignored);
+        error.clear();return true;
+    } catch(const std::exception& e) {
+        error=e.what();
+        if(owned) {std::error_code ignored;std::filesystem::remove_all(directory,ignored);}
+        return false;
     }
 }
+
 bool saveSettings(const std::filesystem::path& path,const Settings& s,std::string& error) {
     try {return writeAtomicTextFile(path,serializeSettings(s),error);}catch(const std::exception& e) {error=e.what();return false;}
 }
