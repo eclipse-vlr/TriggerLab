@@ -86,7 +86,7 @@ int selfTest() {
     if(!loaded.image) return 1;
     Options opts;opts.x=opts.y=1;opts.color.target={35,198,215,255};
     const auto image=crop(*loaded.image,opts);const auto mask=aimColorMask(image,opts.color,opts.settings);
-    check(mask.found && mask.matchingPixels==36 && std::abs(mask.coverage-36./912)<1e-12,"decoded ROI, BGRA and coverage");
+    check(!mask.found && mask.matchingPixels==36 && std::abs(mask.coverage-36./912)<1e-12,"decoded ROI preserves color coverage but rejects off-center target");
     opts.x=std::numeric_limits<int>::max();rejects([&] {crop(*loaded.image,opts);},"large offset rejected without overflow");
     opts.x=2;rejects([&] {crop(*loaded.image,opts);},"partial ROI rejected");
     opts.x=-1;rejects([&] {crop(*loaded.image,opts);},"negative ROI rejected");

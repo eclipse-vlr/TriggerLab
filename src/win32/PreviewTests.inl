@@ -86,9 +86,66 @@
         for(const auto& event:probe.events) report<<event<<'\n';
         return probe.erases==0 && probe.paints==0;
     }
+    bool helpTooltipsTest(std::ostream& report) {
+        report<<"tooltip tools="<<SendMessageW(tooltip,TTM_GETTOOLCOUNT,0,0)<<'\n';
+        if(!tooltip || !colorHelp || !IsWindowVisible(colorHelp)) return false;
+        for(int index=0;index<9;++index) {
+            const HWND help=index<8?settingHelp[index]:colorHelp;
+            if(!help || (IsWindowVisible(help)!=FALSE)!=(index==8 || (settings.advancedMode && !profilePane))) {report<<"help visibility index="<<index<<'\n';return false;}
+            wchar_t text[2048]{};
+            TOOLINFOW info{TTTOOLINFOW_V2_SIZE};info.uFlags=TTF_IDISHWND;info.hwnd=window;info.uId=reinterpret_cast<UINT_PTR>(help);info.lpszText=text;
+            if(!SendMessageW(tooltip,TTM_GETTOOLINFOW,0,reinterpret_cast<LPARAM>(&info)) ||
+                !info.lpszText || info.lpszText==LPSTR_TEXTCALLBACKW || std::wstring(info.lpszText)!=parameterHelp(index)) {report<<"help text index="<<index<<'\n';return false;}
+        }
+        return SendMessageW(tooltip,TTM_GETDELAYTIME,TTDT_INITIAL,0)==400 &&
+            SendMessageW(tooltip,TTM_GETDELAYTIME,TTDT_AUTOPOP,0)==20000;
+    }
+    int helpPopupTest() {
+        wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
+        std::ofstream report(std::filesystem::path(executable).parent_path()/L"help-popup-test-report.txt");
+        report<<std::unitbuf;
+        POINT cursor{};
+        if(!GetCursorPos(&cursor) || inputHeld()) {report<<"SKIP: physical input held\n";return 77;}
+        // Put an inert question mark under the existing pointer. No SendInput
+        // or cursor movement: exercise the native hover timer and real popup.
+        HWND owner=CreateWindowExW(WS_EX_TOPMOST,L"STATIC",L"TriggerLab tooltip test",WS_POPUP|WS_VISIBLE,
+            cursor.x-20,cursor.y-20,80,80,window,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if(!owner) return 2;
+        HWND help=CreateWindowW(L"STATIC",L"?",WS_CHILD|WS_VISIBLE|WS_BORDER|SS_CENTER|SS_CENTERIMAGE|SS_NOTIFY,
+            10,10,30,30,owner,nullptr,GetModuleHandleW(nullptr),nullptr);
+        TOOLINFOW info{TTTOOLINFOW_V2_SIZE};info.uFlags=TTF_IDISHWND|TTF_SUBCLASS;info.hwnd=owner;
+        info.uId=reinterpret_cast<UINT_PTR>(help);info.lpszText=const_cast<wchar_t*>(parameterHelp(1));
+        struct Cleanup {
+            HWND tooltip,owner;TOOLINFOW& info;
+            ~Cleanup() {SendMessageW(tooltip,TTM_POP,0,0);SendMessageW(tooltip,TTM_DELTOOLW,0,reinterpret_cast<LPARAM>(&info));DestroyWindow(owner);}
+        } cleanup{tooltip,owner,info};
+        if(!help || !SendMessageW(tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&info))) return 2;
+        SetWindowSubclass(help,viewportProcedure,2,reinterpret_cast<DWORD_PTR>(this));UpdateWindow(owner);
+        if(WindowFromPoint(cursor)!=help) {report<<"SKIP: tooltip target covered\n";return 77;}
+        for(bool dark:{false,true}) {
+            settings.darkTheme=dark;applyTheme();SendMessageW(tooltip,TTM_POP,0,0);
+            SendMessageW(help,WM_MOUSEMOVE,0,MAKELPARAM(10,10));
+            const auto deadline=triggerlab::Clock::now()+std::chrono::seconds{2};
+            while(!IsWindowVisible(tooltip) && triggerlab::Clock::now()<deadline) {
+                POINT current{};if(!GetCursorPos(&current) || current.x!=cursor.x || current.y!=cursor.y || inputHeld()) {report<<"SKIP: physical input changed\n";return 77;}
+                pumpTestMessages();Sleep(5);
+            }
+            RECT rect{};GetWindowRect(tooltip,&rect);
+            if(!IsWindowVisible(tooltip) || rect.right<=rect.left || rect.bottom<=rect.top) {report<<"FAIL: native hover popup dark="<<dark<<'\n';return 2;}
+            report<<"PASS: native hover popup dark="<<dark<<" width="<<rect.right-rect.left<<" height="<<rect.bottom-rect.top<<'\n';
+        }
+        return 0;
+    }
     bool firstRunTest() {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"first-run-test-report.txt");
+        report<<std::unitbuf;
+        const auto started=triggerlab::Clock::now();
+        auto stage=[&](const char* name) {
+            report<<"STAGE "<<name<<" elapsed_ms="
+                <<std::chrono::duration_cast<std::chrono::milliseconds>(triggerlab::Clock::now()-started).count()<<'\n';
+        };
+        stage("initial layout");
         auto check=[&](bool value,const char* message) {if(!value) report<<message;return value;};
         MINMAXINFO minimum{};SendMessageW(window,WM_GETMINMAXINFO,0,reinterpret_cast<LPARAM>(&minimum));
         if(!check(minimum.ptMinTrackSize.y<800,"FAIL: small screens cannot resize the window\n")) return false;
@@ -100,8 +157,10 @@
         for(UINT testDpi:{96u,120u,144u,192u}) {
             setDpi(testDpi);SetWindowPos(window,nullptr,0,0,640,480,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
             for(int mode:{0,1,2,3}) for(bool dark:{false,true}) {
+                report<<"LAYOUT dpi="<<testDpi<<" mode="<<mode<<" dark="<<dark<<'\n';
                 const bool advanced=mode==1 || mode==2;profilePane=mode==2;homeDetails=mode==3;
                 settings.advancedMode=advanced;settings.darkTheme=dark;applyTheme();layoutMode();
+                if(!check(helpTooltipsTest(report),"FAIL: question-mark help visibility, content or timing\n")) return false;
                 if(testDpi==96 && !check(scrollPaintTest(report),"FAIL: controls repaint during incomplete scroll layout\n")) return false;
                 if(!advanced && !check(IsWindowVisible(homeHint) && IsWindowVisible(homeSummary) &&
                     (IsWindowVisible(profileChoice)!=FALSE)==homeDetails && (IsWindowVisible(qualityInfo)!=FALSE)==homeDetails,
@@ -140,8 +199,10 @@
                 SCROLLINFO info{sizeof(info),SIF_ALL};GetScrollInfo(window,SB_VERT,&info);
                 if(!check(scrollY+static_cast<int>(info.nPage)==scaled(canvasHeight),"FAIL: bottom of canvas inaccessible\n")) return false;
                 InvalidateRect(window,nullptr,FALSE);UpdateWindow(window);
+                stage("layout complete");
             }
         }
+        stage("expanded window");
         // Windows limits thick-frame windows to the current monitor. Allow an
         // off-screen size only here so this layout check works on small screens.
         homeDetails=false;settings.advancedMode=false;layoutMode();
@@ -150,6 +211,7 @@
         setDpi(actualDpi);SetWindowPos(window,nullptr,0,0,original.right-original.left,original.bottom-original.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         settings.advancedMode=false;settings.darkTheme=false;profilePane=false;applyTheme();layoutMode();
         report<<"PASS: 100/125/150/200% DPI, both modes/themes, small window, focus scrolling and expanded window\n";
+        stage("workflow and persistence");
         if(!check(wizardStep()==0 && !colorReady && !verified && !running && !autoClick && profiles.empty(),"FAIL: cold launch\n")) return false;
         HWND target=CreateWindowW(L"STATIC",L"First-run test target",WS_OVERLAPPED,0,0,200,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
         if(!target) return false;
@@ -183,6 +245,7 @@
         if(!invalidRejected) {DestroyWindow(target);report<<"FAIL: invalid hidden field remains hidden/unfocused\n";return false;}
         for(bool dark:{false,true}) {settings.darkTheme=dark;applyTheme();for(int i=0;i<2;++i) {command(23);if(colorDirty() || settingsDirty()) {DestroyWindow(target);return false;}}}
         settings.advancedMode=false;layoutMode();std::string error;if(!persistSettings(error)) {DestroyWindow(target);return false;}
+        stage("restart and profile drafts");
         const auto root=settingsPath.parent_path();
         Preview restarted(root);
         HWND freshWindow=CreateWindowW(L"TriggerLabCapturePreviewClass",L"First-run restart",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,0,0,1120,980,nullptr,nullptr,GetModuleHandleW(nullptr),&restarted);
@@ -222,6 +285,9 @@
         if(!check(FeedbackTone::Waiting,L"Снимок чёрный")) return false;
         sample.allBlack=false;mask.found=false;
         if(!check(FeedbackTone::Waiting,L"Ожидание мишени")) return false;
+        mask.matchingPixels=100;mask.coverage=.5;
+        if(detectionHint().find(L"центр ещё не на мишени")==std::wstring::npos) return false;
+        mask.matchingPixels=0;mask.coverage=0;
         if(!check(FeedbackTone::Waiting,L"Пауза: удерживается ввод",true,true)) return false;
         mask.found=true;gate.reset();
         if(!check(FeedbackTone::Waiting,L"Цвет найден: выдержка задержки")) return false;
@@ -274,6 +340,16 @@
         SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
         if(autoClick || SendMessageW(autoControl,BM_GETCHECK,0,0)!=BST_UNCHECKED) return fail(__LINE__);
         command(1);if(!running) return fail(__LINE__);command(2);
+        // F9 keeps evidence of a failed run; a second Stop preserves it too.
+        command(1);runFrames=12;runAlignedFrames=2;runUnavailableFrames=3;runBestCoverage=.75;
+        runLastIssue=L"Область прицела перекрыта другим окном";
+        command(2);
+        const auto stoppedResult=clickStatus;
+        if(stoppedResult.find(L"Кадры: 12; в центре: 2; недоступны: 3; макс. цвет: 75%")!=0 ||
+            stoppedResult.find(runLastIssue)==std::wstring::npos || running || autoClick || sample.frame) return fail(__LINE__);
+        command(2);if(clickStatus!=stoppedResult) return fail(__LINE__);
+        command(1);if(runFrames || runAlignedFrames || runUnavailableFrames || runBestCoverage || !runLastIssue.empty()) return fail(__LINE__);
+        command(2);
         // Exercise one-shot sampling with a known pixel, independently of Start
         // and of the desktop content / user's cursor. No OS input is sent.
         triggerlab::CaptureSample pixel;

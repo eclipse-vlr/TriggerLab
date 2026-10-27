@@ -41,7 +41,35 @@ int main() {
     frame.clear(c.target);for(int y=12;y<=18;++y) for(int x=12;x<=18;++x) frame.at(x,y)={255,255,255,255};
     auto mask=aimColorMask(frame,c,s);check(mask.found && mask.coverage==1 && mask.matchingPixels==912,"target around white crosshair detected");
     check(mask.pixels[15*31+15]==0,"crosshair is black in mask");
+    // A plus-shaped crosshair extends beyond the excluded square. Its arms
+    // cover all cardinal probes even when the aim point is inside the target.
+    frame.clear(c.target);
+    for(int d=-7;d<=7;++d) for(int w=-1;w<=1;++w) {
+        frame.at(15+d,15+w)={255,255,255,255};
+        frame.at(15+w,15+d)={255,255,255,255};
+    }
+    check(aimColorMask(frame,c,s).found,"target around long plus crosshair detected");
+    for(int y=0;y<31;++y) for(int x=0;x<=15;++x) frame.at(x,y)={0,0,0,255};
+    check(!aimColorMask(frame,c,s).found,"diagonal probes do not trigger on target edge");
+    frame.clear(c.target);
+    for(int d=-7;d<=7;++d) {
+        frame.at(15+d,15+d)={255,255,255,255};
+        frame.at(15+d,15-d)={255,255,255,255};
+    }
+    check(aimColorMask(frame,c,s).found,"cardinal probes still support diagonal crosshair");
     frame.clear({0,0,0,255});frame.at(0,0)=c.target;check(!aimColorMask(frame,c,s).found,"one unrelated pixel below coverage threshold");
+    frame.clear({0,0,0,255});
+    for(int y=0;y<31;++y) for(int x=22;x<31;++x) frame.at(x,y)=c.target;
+    check(!aimColorMask(frame,c,s).found,"target at ROI edge must not fire before crosshair reaches it");
+    s.ignoreRadius=0;frame.clear({0,0,0,255});
+    for(int y=0;y<31;++y) for(int x=16;x<31;++x) frame.at(x,y)=c.target;
+    check(!aimColorMask(frame,c,s).found,"target beside center is not under the aim point");
+    frame.at(15,15)=c.target;
+    check(aimColorMask(frame,c,s).found,"unobscured center on target allows a match");
+    s.ignoreRadius=3;frame.clear(c.target);
+    for(int y=12;y<=18;++y) for(int x=12;x<=18;++x) frame.at(x,y)={255,255,255,255};
+    for(int y=0;y<31;++y) for(int x=0;x<=11;++x) frame.at(x,y)={0,0,0,255};
+    check(!aimColorMask(frame,c,s).found,"target must surround both sides of an excluded crosshair");
     HoverClickGate gate;gate.setTiming(120ms,100ms);auto t=Clock::time_point{}+1s;
     check(!gate.step(true,true,t) && !gate.step(true,true,t+40ms) && !gate.step(true,true,t+80ms) && !gate.step(true,true,t+119ms) && gate.step(true,true,t+120ms),"custom dwell used");
     auto dir=std::filesystem::temp_directory_path()/("triggerlab-analyzer-"+std::to_string(Clock::now().time_since_epoch().count()));

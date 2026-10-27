@@ -19,6 +19,93 @@ LRESULT CALLBACK clickTestProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) 
     if(state && message==WM_LBUTTONUP) {++state->ups;state->releases.push_back(triggerlab::Clock::now());return 0;}
     return DefWindowProcW(hwnd,message,wp,lp);
 }
+// Real capture and pulse scheduling, inert input sender: no desktop clicks.
+int rapidTargetTest(Preview& app) {
+    using namespace std::chrono_literals;
+    wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
+    std::ofstream report(std::filesystem::path(executable).parent_path()/L"target-sequence-test-report.txt");
+    report<<std::unitbuf;
+    POINT cursor{};
+    if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: physical input held\n";return 77;}
+    MONITORINFO monitor{sizeof(monitor)};
+    if(!GetMonitorInfoW(MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST),&monitor)) return 77;
+    // The real cursor must stay in the selected window for the input guard.
+    // Keep the analyzed center away from it without moving the user's pointer.
+    constexpr int sceneSide=640,nearEdge=30,farEdge=sceneSide-nearEdge;
+    if(monitor.rcMonitor.right-monitor.rcMonitor.left<sceneSide || monitor.rcMonitor.bottom-monitor.rcMonitor.top<sceneSide) return 77;
+    const int x=cursor.x+farEdge>monitor.rcMonitor.right?cursor.x-farEdge:cursor.x-nearEdge;
+    const int y=cursor.y+farEdge>monitor.rcMonitor.bottom?cursor.y-farEdge:cursor.y-nearEdge;
+    ClickTestTarget state;
+    WNDCLASSW wc{};wc.hInstance=GetModuleHandleW(nullptr);wc.lpfnWndProc=clickTestProcedure;wc.lpszClassName=L"TriggerLabTargetSequenceTest";
+    if(!RegisterClassW(&wc) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) return 2;
+    const HWND previous=GetForegroundWindow();
+    HWND target=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab target sequence test",WS_POPUP|WS_VISIBLE,x,y,sceneSide,sceneSide,nullptr,nullptr,wc.hInstance,&state);
+    if(!target) return 77;
+    struct Cleanup {
+        Preview& app;HWND target,previous;
+        ~Cleanup() {
+            const bool restore=GetForegroundWindow()==target;
+            app.stop();app.targetWindow=nullptr;DestroyWindow(target);
+            if(restore && previous && IsWindow(previous)) SetForegroundWindow(previous);
+        }
+    } cleanup{app,target,previous};
+    auto fail=[&](const char* reason) {
+        std::cerr<<"FAIL: target sequence: "<<reason<<'\n';
+        report<<"FAIL: "<<reason<<" downs="<<recoveryDowns<<" ups="<<recoveryUps
+            <<" running="<<app.running<<" armed="<<app.autoClick<<" dry="<<app.settings.dryRun
+            <<" fresh="<<app.sample.frame.has_value()<<" found="<<app.mask.found<<" pending="<<app.syntheticDown
+            <<" latch="<<app.gate.clickedHover()<<" dirty="<<app.settingsDirty()<<" colorDirty="<<app.colorDirty()<<'\n';
+        const int bytes=WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),nullptr,0,nullptr,nullptr);
+        std::string status(bytes,'\0');WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),status.data(),bytes,nullptr,nullptr);
+        report<<status<<'\n';return 2;
+    };
+    const auto foregroundThread=GetWindowThreadProcessId(previous,nullptr),thread=GetCurrentThreadId();
+    const bool attached=foregroundThread && foregroundThread!=thread && AttachThreadInput(thread,foregroundThread,TRUE);
+    SetForegroundWindow(target);SetActiveWindow(target);SetFocus(target);
+    if(attached) AttachThreadInput(thread,foregroundThread,FALSE);
+    UpdateWindow(target);pumpTestMessages();
+    if(GetForegroundWindow()!=target) {report<<"SKIP: target focus unavailable\n";return 77;}
+    app.settings={};app.settings.ignoreRadius=0;app.settings.dwellMs=1;app.settings.clickMs=150;
+    app.settings.dryRun=false;app.color.target={19,67,231,255};app.color.channelTolerance=0;
+    app.targetWindow=target;GetWindowThreadProcessId(target,&app.targetProcess);
+    app.syncSettings();app.syncColor();if(!app.saveAll()) return fail("isolated settings save");
+    const auto bounds=app.clientBounds();const auto roi=bounds?triggerlab::aimRegion(*bounds,app.settings):std::optional<triggerlab::Region>{};
+    if(!roi || !app.permittedRegion(*roi)) {report<<"SKIP: test ROI covered or unavailable\n";return 77;}
+    app.verified=true;app.running=true;app.autoClick=true;
+    recoveryDowns=0;recoveryUps=0;rejectRecoveryUp=false;
+    auto paint=[&](COLORREF color) {state.color=color;InvalidateRect(target,nullptr,FALSE);UpdateWindow(target);GdiFlush();DwmFlush();};
+    bool stable=true;
+    auto waitFor=[&](auto predicate) {
+        const auto deadline=triggerlab::Clock::now()+1500ms;
+        while(!predicate() && triggerlab::Clock::now()<deadline) {
+            POINT current{};
+            if(!GetCursorPos(&current) || current.x!=cursor.x || current.y!=cursor.y || GetForegroundWindow()!=target || Preview::inputHeld() || !app.permittedRegion(*roi)) {stable=false;return false;}
+            const auto sampleStarted=triggerlab::Clock::now();app.update();
+            report<<"sample_ms="<<std::chrono::duration_cast<std::chrono::milliseconds>(triggerlab::Clock::now()-sampleStarted).count()
+                <<" dwell_ms="<<app.gate.elapsed(triggerlab::Clock::now()).count()<<'\n';
+            pumpTestMessages();Sleep(1);
+        }
+        return predicate();
+    };
+    for(int count=1;count<=6;++count) {
+        paint(RGB(231,67,19));
+        if(!waitFor([&] {return recoveryDowns.load()>=count;})) {
+            if(!stable) {report<<"SKIP: foreground or physical input changed\n";return 77;}
+            return fail("next target did not trigger without cursor movement");
+        }
+        if(recoveryDowns!=count || !app.syntheticDown) return fail("unexpected pulse count");
+        paint(RGB(50,50,50));app.update();
+        if(!app.sample.frame || app.mask.found) return fail("target departure during pulse was not captured");
+        if(app.gate.clickedHover()) return fail("target departure during pulse did not rearm");
+        if(count<6) paint(RGB(231,67,19));
+        if(!waitFor([&] {return app.clickCount>=static_cast<std::uint64_t>(count);})) return fail("pulse did not finish");
+    }
+    if(recoveryDowns!=6 || recoveryUps!=6 || app.syntheticDown || !app.autoClick) return fail("unbalanced sequence");
+    // Sender above never forwards input to Windows or the test window.
+    if(state.downs || state.ups) return fail("inert sequence sent real input");
+    report<<"PASS: six targets, loss during 150ms pulse, no cursor movement, balanced fake input\n";
+    return 0;
+}
 int referenceCaptureTest(Preview& app) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
