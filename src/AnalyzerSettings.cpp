@@ -27,7 +27,20 @@ ColorMask aimColorMask(const Frame& frame,const ColorMatchConfig& color,const An
         else {++eligible;if(value) ++mask.matchingPixels;}
     }
     mask.coverage=eligible?double(mask.matchingPixels)/eligible:0;
-    mask.found=eligible>0 && mask.matchingPixels>0 && mask.coverage*100>=settings.minimumPercent;
+    // Coverage alone detects a target entering the outer ROI before the aim
+    // point reaches it. Require fresh color at the center, or on all four
+    // sides immediately outside an obscuring crosshair. A second, diagonal
+    // quartet avoids the arms of a plus-shaped crosshair. Each quartet must
+    // surround the aim point; color on just one side is insufficient.
+    auto matching=[&](int x,int y) {
+        return frame.contains(x,y) && mask.pixels[static_cast<std::size_t>(y)*frame.width()+x]!=0;
+    };
+    const int radius=settings.ignoreRadius+1;
+    const bool cardinal=matching(cx-radius,cy) && matching(cx+radius,cy) && matching(cx,cy-radius) && matching(cx,cy+radius);
+    const bool diagonal=matching(cx-radius,cy-radius) && matching(cx+radius,cy-radius) &&
+        matching(cx-radius,cy+radius) && matching(cx+radius,cy+radius);
+    const bool centered=settings.ignoreRadius==0?matching(cx,cy):(cardinal || diagonal);
+    mask.found=centered && eligible>0 && mask.matchingPixels>0 && mask.coverage*100>=settings.minimumPercent;
     return mask;
 }
 ColorSampleCheck compareColorSamples(const Frame* target,const Frame* background,const ColorMatchConfig& color,const AnalyzerSettings& settings) {

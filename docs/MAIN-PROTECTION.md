@@ -1,5 +1,12 @@
 # Защита main
 
+На 27 октября 2026 защита включена: [активное правило main](https://github.com/eclipse-vlr/TriggerLab/rules/25941001).
+Проверено через API: `protected=true`, `enforcement=active`, цель — default branch,
+список обходов пуст. Обязательны PR и три проверки GitHub Actions, запрещены
+удаление и force-push. Дополнительные одобрения ревью не обязательны (0).
+Правило сохранено через браузер после подтверждения доступа владельцем;
+подключение GitHub по-прежнему не предоставляет операцию записи этих настроек.
+
 Для владельца репозитория: Settings → Rules → Rulesets → New branch ruleset.
 
 - Name: main; Enforcement: Active; Target: default branch.

@@ -12,6 +12,8 @@ bool validAnalyzerSettings(const AnalyzerSettings&) noexcept;
 AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path&);
 bool saveAnalyzerSettings(const std::filesystem::path&,const AnalyzerSettings&,std::string& error);
 std::optional<Region> aimRegion(Region client,const AnalyzerSettings&) noexcept;
+// Coverage remains diagnostic; found also requires alignment at the aim point
+// or on all four cardinal or diagonal probes outside an excluded crosshair.
 ColorMask aimColorMask(const Frame&,const ColorMatchConfig&,const AnalyzerSettings&);
 struct ColorSampleCheck {
     bool valid=true;

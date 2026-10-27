@@ -114,6 +114,22 @@ struct Preview {
     std::filesystem::path settingsPath;
     std::array<HWND,8> settingEdits{};
     std::array<HWND,8> settingLabels{};
+    std::array<HWND,8> settingHelp{};
+    HWND colorHelp=nullptr;
+    static const wchar_t* parameterHelp(int index) {
+        static const wchar_t* texts[]={
+            L"Размер области вокруг прицела: нечётное число от 5 до 101 пикселя. Большая область помогает видеть мишень, но клик разрешается только у центра. Слишком большая область может включать фон и соседние цели.",
+            L"Радиус исключения перекрестия в пикселях: 3 означает квадрат 7×7. Его цвет не учитывается. Мишень должна совпасть во всех четырёх точках по сторонам либо по диагоналям от центра: диагонали обходят лучи прицела в форме плюса. Для маленьких целей уменьшите радиус; 0 проверяет сам центральный пиксель.",
+            L"Минимальная доля цвета мишени в области без исключённого центра: от 1 до 100%. Высокий порог может пропускать маленькие цели. Низкий порог не разрешает клик по цели у края: наведение центром всё равно обязательно.",
+            L"Сдвиг точки анализа по горизонтали от центра клиентской области выбранного окна. Плюс — вправо, минус — влево. Оставьте 0, если прицел по центру; ошибочный сдвиг даёт ранние или пропущенные срабатывания.",
+            L"Сдвиг точки анализа по вертикали от центра клиентской области выбранного окна. Плюс — вниз, минус — вверх. Оставьте 0 для прицела по центру.",
+            L"Время наблюдаемого совпадения до клика: 1–2000 мс. Большая задержка может пропускать быстрые наведения, маленькая сильнее реагирует на краткие совпадения. После ошибки захвата или длительной паузы отсчёт начинается заново.",
+            L"Минимальное время между началами двух кликов: 50–2000 мс. Это не автоповтор. Следующий клик возможен только после свежего кадра без совпадения и нового наведения. Цвет продолжает проверяться во время удержания кнопки.",
+            L"Сколько удерживать левую кнопку: 5–150 мс, по умолчанию 30. Это не задержка перед кликом. Тренажёры по-разному принимают короткие нажатия; слишком длинное может вызвать несколько выстрелов. Stop/F9 прерывает удержание.",
+            L"Допустимое отклонение каждого канала RGB: 0–255. Например, 10 допускает отличие на 10 в R, G и B. Большой допуск может принять фон за мишень. В HSV это поле отключено: там действуют отдельные допуски оттенка, насыщенности и яркости. H переключает RGB/HSV; после изменений сохраните настройки и проверьте цвет."
+        };
+        return texts[index];
+    }
     std::array<HWND,4> colorLabels{};
     HWND settingsHint=nullptr,colorHint=nullptr,profileChoice=nullptr,profileName=nullptr;
     bool uiSync=false,uiReady=false,colorReady=false,verified=false,profilePane=false;
@@ -135,6 +151,9 @@ struct Preview {
     std::optional<triggerlab::CapturePoint> analysisPoint;
     std::optional<triggerlab::Region> analyzedClient;
     std::uint64_t diagnosticCount=0;
+    std::uint64_t runFrames=0,runAlignedFrames=0,runUnavailableFrames=0;
+    double runBestCoverage=0;
+    std::wstring runLastIssue;
     ULONGLONG lastPaint=0;
     std::unique_ptr<PaintSurface> backBuffer;
     int bufferWidth=0,bufferHeight=0;
@@ -360,7 +379,8 @@ struct Preview {
             const int columns=canvasWidth>=480?2:1,cell=(width-12*(columns-1))/columns;
             for(int i=0;i<8;++i) {
                 const int x=left+(i%columns)*(cell+12),top=y+(i/columns)*68;
-                put(settingLabels[i],x,top,cell,22);put(settingEdits[i],x,top+24,cell,32);
+                put(settingLabels[i],x,top,cell,22);put(settingEdits[i],x,top+24,cell-28,32);
+                put(settingHelp[i],x+cell-22,top+24,22,32);
             }
             y+=((8+columns-1)/columns)*68;
             put(settingsHint,left,y,width,62);y+=70;
@@ -374,7 +394,8 @@ struct Preview {
         if(settings.advancedMode) {
             const int columns=canvasWidth>=360?2:1,cell=(width-12*(columns-1))/columns;
             for(int i=0;i<4;++i) {const int x=left+(i%columns)*(cell+12),top=y+(i/columns)*68;
-                put(colorLabels[i],x,top,cell,22);put(colorEdits[i],x,top+24,cell,32);}
+                put(colorLabels[i],x,top,cell,22);put(colorEdits[i],x,top+24,cell-(i==3?28:0),32);
+                if(i==3) put(colorHelp,x+cell-22,top+24,22,32);}
             y+=((4+columns-1)/columns)*68;button(3,y);y+=48;button(6,y);y+=48;
         } else {put(colorLabels[3],left,y,width,22);put(colorEdits[3],left,y+24,width,32);y+=68;put(colorHint,left,y,width,70);y+=78;}
         y+=58; // Current-color caption and swatch.
@@ -403,7 +424,8 @@ struct Preview {
         colorCard={cx,colorTop,cx+cell,colorTop+450};
         const int x=cx+16,width=cell-32;
         button(20,x,colorTop+58,width,42);button(10,x,colorTop+110,width);
-        put(colorLabels[3],x,colorTop+166,width,22);put(colorEdits[3],x,colorTop+192,width,32);
+        put(colorLabels[3],x,colorTop+166,width,22);put(colorEdits[3],x,colorTop+192,width-28,32);
+        put(colorHelp,x+width-22,colorTop+192,22,32);
         button(24,x,colorTop+382,width,42);
         int y=colorCard.bottom+16;
         const int summaryHeight=canvasWidth<480?272:160;
@@ -539,6 +561,7 @@ struct Preview {
         const bool advanced=settings.advancedMode,parameters=advanced && !profilePane;
         for(HWND field:settingEdits) ShowWindow(field,parameters?SW_SHOW:SW_HIDE);
         for(HWND label:settingLabels) ShowWindow(label,parameters?SW_SHOW:SW_HIDE);
+        for(HWND help:settingHelp) ShowWindow(help,parameters?SW_SHOW:SW_HIDE);
         ShowWindow(settingsHint,parameters?SW_SHOW:SW_HIDE);
         for(int id:{26,27,28,29}) ShowWindow(GetDlgItem(window,id),parameters?SW_HIDE:SW_SHOW);
         for(int i=0;i<3;++i) {ShowWindow(colorEdits[i],advanced?SW_SHOW:SW_HIDE);ShowWindow(colorLabels[i],advanced?SW_SHOW:SW_HIDE);}
@@ -546,7 +569,7 @@ struct Preview {
         ShowWindow(GetDlgItem(window,22),advanced?SW_HIDE:SW_SHOW);ShowWindow(GetDlgItem(window,17),SW_HIDE);
         ShowWindow(colorHint,advanced?SW_HIDE:SW_SHOW);
         placeLogical(colorLabels[3],advanced?370:40,457,104,22);
-        placeLogical(colorEdits[3],advanced?370:40,482,96,30);
+        placeLogical(colorEdits[3],advanced?370:40,482,advanced?68:96,30);
         SetWindowTextW(GetDlgItem(window,23),advanced?L"Простой режим":L"Расширенные");
         ShowWindow(GetDlgItem(window,25),advanced?SW_SHOW:SW_HIDE);
         SetWindowTextW(GetDlgItem(window,25),profilePane?L"Параметры":L"Профили");
@@ -606,6 +629,8 @@ struct Preview {
         if(!sample.frame) return captureHint();
         if(sample.allBlack && settings.center) return L"Снимок чёрный. Попробуйте оконный режим тренажёра.";
         if(!colorFound()) {
+            if(settings.center && mask.matchingPixels>0 && mask.coverage*100>=settings.minimumPercent)
+                return L"Цвет виден рядом с прицелом, но центр ещё не на мишени. Наведите центром; для маленьких целей уменьшите исключение перекрестия и проверьте сдвиги X/Y.";
             if(settings.center && mask.matchingPixels>0) return L"Цвет есть: "+percent(mask.coverage)+L", нужно "+std::to_wstring(settings.minimumPercent)+L"%. Наведите прицел ближе к мишени или уточните область.";
             if(settings.center && triggerlab::excludedColorPixels(*sample.frame,color,settings)>0) return L"Цвет только под исключённым перекрестием. Выберите цвет мишени вне перекрестия.";
             return L"Цвет не найден. Уточните оттенок и допуск; сравните эталоны мишени и фона.";
@@ -750,7 +775,7 @@ struct Preview {
         syntheticDown=inputPulse.pendingRelease();lastPress=*completed;
         // A pulse already released by the worker still counts if Stop arrives
         // before the UI consumes completion. Only an actual cancellation is partial.
-        if(completed->releaseAccepted && !completed->interrupted) {gate.acknowledgeClick(completed->finishedAt);++clickCount;clickStatus=L"Клик отправлен: нажатие и отпускание";}
+        if(completed->releaseAccepted && !completed->interrupted) {++clickCount;clickStatus=L"Клик отправлен: нажатие и отпускание";}
         if(!completed->releaseAccepted) {autoClick=false;gate.reset();SendMessageW(autoControl,BM_SETCHECK,BST_UNCHECKED,0);notice=clickStatus=L"Отпускание отклонено системой; новые клики заблокированы, Stop/F9 повторяет отпускание";}
         if(!syntheticDown && !autoClick && !pickDeadline && !targetDeadline && !aimPickDeadline) UnregisterHotKey(window,9);
     }
@@ -942,7 +967,7 @@ struct Preview {
         if(!autoClick) return;
         if(!inputAuthorized()) {disableClicks();notice=L"Сохраните настройки и проверьте цвет перед включением кликов";return;}
         if(!IsWindow(targetWindow)) {disableClicks();status=L"Автоклик выключен: целевое окно закрыто";return;}
-        if(inputHeld()) {gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Пауза: зажата кнопка мыши или клавиша-модификатор";return;}
+        if(inputHeld(!syntheticDown)) {gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Пауза: зажата кнопка мыши или клавиша-модификатор";return;}
         if(!permittedAt(capturedCursor)) {
             // A focus change is not evidence that the cursor left the color.
             const bool outside=GetAncestor(WindowFromPoint(capturedCursor),GA_ROOT)!=targetWindow;
@@ -951,6 +976,11 @@ struct Preview {
         }
         const bool match=settings.center?mask.found:(sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel,color));
         const auto now=triggerlab::Clock::now();
+        if(syntheticDown) {
+            // Observe a short target departure even while our own Down is held.
+            // Only the pulse owner may release it; never submit another Down here.
+            gate.step(sample.frame.has_value(),match,now);clickStatus=L"Нажатие выполняется";return;
+        }
         if(!gate.step(sample.frame.has_value(),match,now)) {
             clickStatus=!match?L"Ожидаю цвет в области обнаружения":gate.clickedHover()?L"Срабатывание выполнено: нужен уход с цвета":L"Совпадение: ожидание "+std::to_wstring(gate.elapsed(now).count())+L" / "+std::to_wstring(settings.dwellMs)+L" мс";
             return;
@@ -970,12 +1000,12 @@ struct Preview {
             gate.step(false,false,triggerlab::Clock::now());clickStatus=L"Ожидание прервано: курсор, окно или клавиши изменились";return;
         }
         if(inputPulse.start(settings.clickMs)) {
-            syntheticDown=true;clickStatus=L"Нажатие выполняется";
+            gate.acknowledgeClick(triggerlab::Clock::now());syntheticDown=true;clickStatus=L"Нажатие выполняется";
         } else {const auto error=GetLastError();disableClicks();status=L"Ввод отклонён системой (код "+std::to_wstring(error)+L")";clickStatus=status;notice=status;actionError=status+L". Проверьте доступность выбранного окна и повторите проверку цвета.";}
     }
-    static bool inputHeld() {
+    static bool inputHeld(bool includeLeftButton=true) {
         for(int key:{VK_CONTROL,VK_MENU,VK_SHIFT,VK_LWIN,VK_RWIN,VK_LBUTTON,VK_RBUTTON,VK_MBUTTON,VK_XBUTTON1,VK_XBUTTON2})
-            if(GetAsyncKeyState(key)&0x8000) return true;
+            if((includeLeftButton || key!=VK_LBUTTON) && (GetAsyncKeyState(key)&0x8000)) return true;
         return false;
     }
     void createControls() {
@@ -985,6 +1015,10 @@ struct Preview {
             return CreateWindowW(L"BUTTON",label,WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW,x,y,w,h,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),nullptr,nullptr);
         };
         auto label=[&](const wchar_t* text,int x,int y,int width) {return CreateWindowW(L"STATIC",text,WS_CHILD|WS_VISIBLE,x,y,width,22,window,nullptr,nullptr,nullptr);};
+        auto question=[&](int id,int x,int y,int height) {
+            return CreateWindowW(L"STATIC",L"?",WS_CHILD|WS_VISIBLE|WS_BORDER|SS_CENTER|SS_CENTERIMAGE|SS_NOTIFY,
+                x,y,22,height,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),nullptr,nullptr);
+        };
         button(21,L"Серая тема: выключена",914,20,168,36);
         button(23,L"Расширенные",710,20,188,36);button(25,L"Профили",574,20,120,36);
         button(34,L"Профили и диагностика",24,700,500,42);
@@ -1003,9 +1037,10 @@ struct Preview {
         const wchar_t* settingsLabels[]={L"Область, px",L"Исключить центр",L"Порог, %",L"Сдвиг X, px",L"Сдвиг Y, px",L"Задержка, мс",L"Интервал, мс",L"Нажатие, мс"};
         for(int i=0;i<8;++i) {
             settingLabels[i]=label(settingsLabels[i],40+i*128,300,124);
-            settingEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,40+i*128,326,112,30,window,nullptr,nullptr,nullptr);
+            settingEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,40+i*128,326,84,30,window,nullptr,nullptr,nullptr);
+            settingHelp[i]=question(100+i,130+i*128,326,30);
         }
-        settingsHint=label(L"Область 5–101 px, нечётная. Исключите перекрестие; порог задаёт долю цвета.",40,368,780);
+        settingsHint=label(L"Клик только у центра. Наведите на ? рядом с полем для подробной подсказки.",40,368,780);
         button(17,L"Сохранить",938,365,124,30);
         button(24,L"Сохранить всё",844,365,218,30);
         profileChoice=CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST,40,326,366,180,window,reinterpret_cast<HMENU>(28),nullptr,nullptr);
@@ -1018,6 +1053,8 @@ struct Preview {
             colorLabels[i]=label(colors[i],40+i*110,457,104);
             colorEdits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER,40+i*110,482,96,30,window,nullptr,nullptr,nullptr);
         }
+        colorHelp=question(108,444,482,30);
+        SetWindowPos(colorEdits[3],nullptr,0,0,68,30,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         button(3,L"Применить",482,482,120,30);button(6,L"Сохранить цвет",618,482,160,30);
         button(20,L"Цвет из прицела (3 сек.)",40,530,240);
         button(5,L"Пипетка (3 сек.)",294,530,174);
@@ -1033,12 +1070,15 @@ struct Preview {
         INITCOMMONCONTROLSEX common{sizeof(common),ICC_WIN95_CLASSES};InitCommonControlsEx(&common);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,window,nullptr,GetModuleHandleW(nullptr),nullptr);
         if(tooltip) {
-            SetWindowTheme(tooltip,L"",L"");SendMessageW(tooltip,TTM_SETMAXTIPWIDTH,0,360);
+            SetWindowTheme(tooltip,L"",L"");SendMessageW(tooltip,TTM_SETMAXTIPWIDTH,0,420);
+            SendMessageW(tooltip,TTM_SETDELAYTIME,TTDT_INITIAL,400);
+            SendMessageW(tooltip,TTM_SETDELAYTIME,TTDT_AUTOPOP,20000);
             SendMessageW(tooltip,WM_SETFONT,reinterpret_cast<WPARAM>(uiFont),FALSE);
-            auto tip=[&](HWND control,const wchar_t* text) {TOOLINFOW info{sizeof(info)};info.uFlags=TTF_IDISHWND|TTF_SUBCLASS;info.hwnd=window;info.uId=reinterpret_cast<UINT_PTR>(control);info.lpszText=const_cast<wchar_t*>(text);SendMessageW(tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&info));};
-            const wchar_t* tips[]={L"Размер квадратной области вокруг прицела: нечётное число от 5 до 101 пикселя.",L"Радиус исключения перекрестия. Центр не участвует в распознавании; 0 отключает исключение.",L"Какая доля области должна совпадать с цветом: от 1 до 100 процентов.",L"Смещение области вправо (+) или влево (−) от центра окна.",L"Смещение области вниз (+) или вверх (−) от центра окна.",L"Цвет должен непрерывно совпадать столько миллисекунд до срабатывания.",L"Минимальный интервал после предыдущего клика. Для повторения цвет должен исчезнуть и появиться вновь.",L"Длительность удержания левой кнопки мыши: 5–150 мс. По умолчанию 30 мс."};
-            for(int i=0;i<8;++i) tip(settingEdits[i],tips[i]);
-            tip(colorEdits[3],L"Допустимое отклонение каналов RGB: 0–255. Большой допуск может захватывать фон.");
+            // The application also supports common-controls v5 without a v6
+            // manifest. It rejects the newer lpReserved-sized TOOLINFO.
+            auto tip=[&](HWND control,const wchar_t* text) {TOOLINFOW info{TTTOOLINFOW_V2_SIZE};info.uFlags=TTF_IDISHWND|TTF_SUBCLASS;info.hwnd=window;info.uId=reinterpret_cast<UINT_PTR>(control);info.lpszText=const_cast<wchar_t*>(text);SendMessageW(tooltip,TTM_ADDTOOLW,0,reinterpret_cast<LPARAM>(&info));};
+            for(int i=0;i<8;++i) {tip(settingEdits[i],parameterHelp(i));tip(settingHelp[i],parameterHelp(i));}
+            tip(colorEdits[3],parameterHelp(8));tip(colorHelp,parameterHelp(8));
             tip(dryControl,L"Проверка распознавания и задержки без отправки мышиных кликов.");
             tip(autoControl,L"Сначала выберите окно и начните захват. Один клик на непрерывное совпадение; F9 останавливает работу.");
             tip(GetDlgItem(window,20),L"Окно тренажёра активируется автоматически. За 3 секунды наведите прицел на мишень, затем выберите цвет в палитре. F9 — отмена.");
@@ -1064,7 +1104,7 @@ struct Preview {
     }
     void command(int id,int notification=BN_CLICKED) {
         if(id==1 || id==2 || id==5 || id==7 || id==18 || id==19 || id==20 || id==22 || id==24 || id==26 || id==27 || id==31 || id==32) actionError.clear();
-        if(id==1) {if(SetTimer(window,1,10,nullptr)) {running=true;status=L"Захват активен";}else {status=L"Не удалось начать захват";actionError=L"Не удалось создать таймер захвата. Остановите анализатор и повторите запуск.";}}
+        if(id==1) {if(SetTimer(window,1,10,nullptr)) {runFrames=runAlignedFrames=runUnavailableFrames=0;runBestCoverage=0;runLastIssue.clear();running=true;status=L"Захват активен";}else {status=L"Не удалось начать захват";actionError=L"Не удалось создать таймер захвата. Остановите анализатор и повторите запуск.";}}
         else if(id==2) stop();
         else if(id==3) {if(applyColor()) status=L"RGB применён; автоклик выключен";}
         else if(id==4) chooseColor();
@@ -1118,13 +1158,24 @@ struct Preview {
     }
     std::wstring notice;
     std::wstring status=L"Захват остановлен";
-    void stop() {running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};actionError.clear();status=syntheticDown?L"Захват остановлен; ожидаем подтверждения отпускания кнопки":L"Захват остановлен";notice=status;syncActions();InvalidateRect(window,nullptr,FALSE);}
+    void stop() {
+        const bool wasRunning=running;
+        const auto previousResult=clickStatus;
+        running=false;disableClicks();cancelSelection();KillTimer(window,1);capture.reset();sample={};mask={};actionError.clear();
+        if(!syntheticDown) {
+            if(wasRunning) clickStatus=L"Кадры: "+std::to_wstring(runFrames)+L"; в центре: "+std::to_wstring(runAlignedFrames)+
+                L"; недоступны: "+std::to_wstring(runUnavailableFrames)+L"; макс. цвет: "+std::to_wstring(static_cast<int>(runBestCoverage*100))+L"%"+
+                (runLastIssue.empty()?L"":L"\nПоследняя пауза: "+runLastIssue);
+            else clickStatus=previousResult; // Repeated F9 must not erase the completed run.
+        }
+        status=syntheticDown?L"Захват остановлен; ожидаем подтверждения отпускания кнопки":L"Захват остановлен";notice=status;syncActions();InvalidateRect(window,nullptr,FALSE);
+    }
     void update(bool pick=false) {
         if(!running && !pick) return;
         if(syntheticDown) {
             if(!autoClick || GetAncestor(GetForegroundWindow(),GA_ROOT)!=targetWindow) {disableClicks();return;}
             finishClick();
-            if(syntheticDown) return;
+            if(!autoClick) return;
         }
         if(pick) {cancelSelection();disableClicks();}
         analysisPoint.reset();analyzedClient.reset();
@@ -1144,6 +1195,10 @@ struct Preview {
                     analyzedClient=bounds;analysisPoint=triggerlab::CapturePoint{center.x,center.y};acceptSample(std::move(fresh),false);
                 }
             }
+        }
+        if(running && !pick) {
+            if(sample.frame) {++runFrames;if(mask.found) ++runAlignedFrames;runBestCoverage=std::max(runBestCoverage,mask.coverage);}
+            else {++runUnavailableFrames;runLastIssue=status;}
         }
         if(!running) capture.reset();
     }
@@ -1485,13 +1540,17 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR commandLine,int show) {
         const std::wstring option(commandLine);
         const bool firstRun=option==L"--first-run-test";
         const bool recovery=option==L"--input-recovery-test";
-        const bool isolated=firstRun || recovery || option==L"--window-picker-test" || option==L"--smoke-test" || option==L"--click-test" || option==L"--center-click-test" || option==L"--guided-click-test" || option==L"--reference-test" || option==L"--pulse-test";
+        const bool sequence=option==L"--target-sequence-test";
+        const bool helpPopup=option==L"--help-popup-test";
+        const bool isolated=firstRun || recovery || sequence || helpPopup || option==L"--window-picker-test" || option==L"--smoke-test" || option==L"--click-test" || option==L"--center-click-test" || option==L"--guided-click-test" || option==L"--reference-test" || option==L"--pulse-test";
         const auto testRoot=isolated?std::filesystem::temp_directory_path()/(L"triggerlab-first-run-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(triggerlab::Clock::now().time_since_epoch().count())):std::filesystem::path{};
-        Preview app(testRoot,recovery?recoverySender:SendInput);WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"TriggerLabCapturePreviewClass";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+        Preview app(testRoot,(recovery || sequence)?recoverySender:SendInput);WNDCLASSW wc{};wc.lpfnWndProc=procedure;wc.hInstance=instance;wc.lpszClassName=L"TriggerLabCapturePreviewClass";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         if(!RegisterClassW(&wc)) {triggerlab::reportStartupError(L"RegisterClass");return 1;}
         HWND window=CreateWindowExW(WS_EX_COMPOSITED,wc.lpszClassName,L"TriggerLab — тренировки Kovaak’s / Aimlabs",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1120,980,nullptr,nullptr,instance,&app);
         if(!window) {triggerlab::reportStartupError(L"CreateWindow");return 1;}
         if(recovery) {const bool passed=app.inputRecoveryTest();DestroyWindow(window);std::filesystem::remove_all(testRoot);return passed?0:2;}
+        if(sequence) {const int result=rapidTargetTest(app);DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
+        if(helpPopup) {const int result=app.helpPopupTest();DestroyWindow(window);std::filesystem::remove_all(testRoot);return result;}
         if(firstRun) {
             ShowWindow(window,SW_SHOW);
             const bool passed=app.firstRunTest();DestroyWindow(window);std::filesystem::remove_all(testRoot);return passed?0:2;

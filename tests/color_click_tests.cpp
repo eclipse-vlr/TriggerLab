@@ -68,6 +68,12 @@ int main() {
     check(!gate.step(true,true,time) && !gate.step(true,true,time+1s),"UI stall cannot satisfy dwell");
     check(!gate.step(true,true,time+1035ms) && gate.step(true,true,time+1070ms),"fresh samples after stall required");
     gate.reset();
+    check(!gate.step(true,true,time) && gate.step(true,true,time+80ms),"fresh 80ms capture cadence can complete dwell");
+    gate.reset();
+    check(!gate.step(true,true,time) && gate.step(true,true,time+200ms),"bounded slow fresh cadence completes dwell");
+    gate.reset();
+    check(!gate.step(true,true,time) && !gate.step(true,true,time+201ms),"gap beyond capture budget restarts dwell");
+    gate.reset();
     check(!gate.step(true,true,time) && !gate.step(true,true,time+35ms) && !gate.step(true,false,time+69ms),"departure at 69ms cancels");
     gate.acknowledgeClick(time+69ms); // A cancelled operation cannot latch the gate.
     check(!gate.step(true,true,time+70ms) && !gate.step(true,true,time+105ms) && gate.step(true,true,time+140ms),"reentry starts new dwell");

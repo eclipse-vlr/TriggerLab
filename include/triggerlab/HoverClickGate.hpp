@@ -10,7 +10,9 @@ class HoverClickGate {
 public:
     static constexpr std::chrono::milliseconds dwell{70};
     static constexpr std::chrono::milliseconds cooldown{50};
-    static constexpr std::chrono::milliseconds maximumSampleGap{50};
+    // GDI capture can exceed 50ms on a composed desktop. Every step still
+    // requires a fresh valid frame; longer stalls must restart observation.
+    static constexpr std::chrono::milliseconds maximumSampleGap{200};
     void setTiming(std::chrono::milliseconds delay,std::chrono::milliseconds interval) noexcept {
         delay_=std::clamp(delay,std::chrono::milliseconds{1},std::chrono::milliseconds{2000});
         interval_=std::clamp(interval,std::chrono::milliseconds{50},std::chrono::milliseconds{2000});reset();
