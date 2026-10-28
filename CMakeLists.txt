@@ -5,147 +5,162 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(TRIGGERLAB_BUILD_TESTS "Build TriggerLab unit tests" ON)
+option(TRIGGERLAB_BUILD_TESTS "Build TriggerLab tests" ON)
 option(TRIGGERLAB_STATIC_RUNTIME "Bundle MSVC runtime into executables" ON)
+option(TRIGGERLAB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 if(MSVC AND TRIGGERLAB_STATIC_RUNTIME)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
+include(cmake/ProjectOptions.cmake)
+
+configure_file(include/triggerlab/Version.hpp.in generated/triggerlab/Version.hpp @ONLY)
 
 add_library(triggerlab_core STATIC
     src/TargetDetector.cpp
     src/TriggerEngine.cpp
     src/Simulation.cpp
-    src/Config.cpp
     src/Diagnostics.cpp
     src/ColorMask.cpp
-    src/ColorProfile.cpp
     src/ImageColor.cpp
     src/AnalyzerSettings.cpp
-    src/TrainingProfile.cpp
+    src/persistence/AtomicFile.cpp
+    src/persistence/Config.cpp
+    src/persistence/ColorProfile.cpp
+    src/persistence/AnalyzerSettingsFile.cpp
+    src/persistence/TrainingProfile.cpp
 )
-target_include_directories(triggerlab_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_compile_features(triggerlab_core PUBLIC cxx_std_20)
-
-if(MSVC)
-    target_compile_options(triggerlab_core PRIVATE /W4 /permissive-)
-    target_compile_options(triggerlab_core PUBLIC /utf-8)
-else()
-    target_compile_options(triggerlab_core PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+target_include_directories(triggerlab_core
+    PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    PRIVATE src
+)
+triggerlab_configure_target(triggerlab_core)
 
 if(WIN32)
-    target_compile_definitions(triggerlab_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     add_library(triggerlab_capture STATIC src/win32/ScreenCapture.cpp src/win32/ImageFile.cpp)
     target_link_libraries(triggerlab_capture PUBLIC triggerlab_core PRIVATE user32 gdi32 windowscodecs ole32 dwmapi)
-    target_compile_definitions(triggerlab_capture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(triggerlab_capture PRIVATE /W4 /permissive-)
-    endif()
-    add_executable(TriggerLabCapturePreview WIN32 src/win32/capture_preview.cpp src/win32/ImagePaletteDialog.cpp src/win32/WindowPickerDialog.cpp)
-    target_compile_definitions(TriggerLabCapturePreview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(TriggerLabCapturePreview PRIVATE triggerlab_capture user32 gdi32 comdlg32 msimg32 dwmapi comctl32 uxtheme)
-    add_custom_command(TARGET TriggerLabCapturePreview POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TriggerLabCapturePreview> $<TARGET_FILE_DIR:TriggerLabCapturePreview>/TriggerLab.exe)
-    if(MSVC)
-        target_compile_options(TriggerLabCapturePreview PRIVATE /W4 /permissive-)
-    endif()
-    add_executable(TriggerLabTrainer WIN32 src/win32/main.cpp)
-    target_link_libraries(TriggerLabTrainer PRIVATE triggerlab_core user32 gdi32)
-    target_compile_definitions(TriggerLabTrainer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(TriggerLabTrainer PRIVATE /W4 /permissive- /utf-8)
-    else()
-        target_compile_options(TriggerLabTrainer PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    triggerlab_configure_target(triggerlab_capture)
+
+    set(preview_sources
+        src/win32/preview/PreviewWindow.cpp
+        src/win32/preview/PreviewSettings.cpp
+        src/win32/preview/PreviewLayout.cpp
+        src/win32/preview/PreviewFeedback.cpp
+        src/win32/preview/PreviewCapture.cpp
+        src/win32/preview/PreviewInput.cpp
+        src/win32/preview/PreviewControls.cpp
+        src/win32/preview/PreviewHomePaint.cpp
+        src/win32/preview/PreviewNarrowPaint.cpp
+        src/win32/preview/PreviewPaint.cpp
+        src/win32/ImagePaletteDialog.cpp
+        src/win32/WindowPickerDialog.cpp
+    )
+    function(triggerlab_add_preview_library target)
+        add_library(${target} STATIC ${preview_sources})
+        target_include_directories(${target} PUBLIC src/win32)
+        target_link_libraries(${target} PUBLIC triggerlab_capture PRIVATE user32 gdi32 comdlg32 msimg32 dwmapi comctl32 uxtheme)
+        triggerlab_configure_target(${target})
+    endfunction()
+    triggerlab_add_preview_library(triggerlab_preview)
+    add_executable(TriggerLab WIN32 src/win32/preview_main.cpp)
+    target_link_libraries(TriggerLab PRIVATE triggerlab_preview)
+    triggerlab_configure_target(TriggerLab)
+
+    add_library(triggerlab_trainer STATIC
+        src/win32/trainer/TrainerWindow.cpp
+        src/win32/trainer/TrainerControls.cpp
+        src/win32/trainer/TrainerSession.cpp
+        src/win32/trainer/TrainerPaint.cpp
+    )
+    target_include_directories(triggerlab_trainer PUBLIC src/win32)
+    target_link_libraries(triggerlab_trainer PUBLIC triggerlab_core PRIVATE user32 gdi32)
+    triggerlab_configure_target(triggerlab_trainer)
+    add_executable(TriggerLabTrainer WIN32 src/win32/trainer_main.cpp)
+    target_link_libraries(TriggerLabTrainer PRIVATE triggerlab_trainer)
+    triggerlab_configure_target(TriggerLabTrainer)
 else()
     message(STATUS "GUI is Windows-only; portable core/tests are available on this platform.")
 endif()
 
 if(TRIGGERLAB_BUILD_TESTS)
     enable_testing()
-    add_executable(triggerlab_color_scene_tests tests/color_scene_tests.cpp)
-    target_link_libraries(triggerlab_color_scene_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_color_scene_tests COMMAND triggerlab_color_scene_tests)
-    add_executable(triggerlab_training_profile_tests tests/training_profile_tests.cpp)
-    target_link_libraries(triggerlab_training_profile_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_training_profile_tests COMMAND triggerlab_training_profile_tests)
-    add_executable(triggerlab_analyzer_tests tests/analyzer_tests.cpp)
-    target_link_libraries(triggerlab_analyzer_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_analyzer_tests COMMAND triggerlab_analyzer_tests)
-    add_executable(triggerlab_image_color_tests tests/image_color_tests.cpp)
-    target_link_libraries(triggerlab_image_color_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_image_color_tests COMMAND triggerlab_image_color_tests)
-    add_executable(triggerlab_tests tests/core_tests.cpp)
-    target_link_libraries(triggerlab_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_tests COMMAND triggerlab_tests)
-    add_executable(triggerlab_config_tests tests/config_tests.cpp)
-    target_link_libraries(triggerlab_config_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_config_tests COMMAND triggerlab_config_tests)
-    add_executable(triggerlab_session_tests tests/session_tests.cpp)
-    target_link_libraries(triggerlab_session_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_session_tests COMMAND triggerlab_session_tests)
-    add_executable(triggerlab_color_click_tests tests/color_click_tests.cpp)
-    target_link_libraries(triggerlab_color_click_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_color_click_tests COMMAND triggerlab_color_click_tests)
-    add_executable(triggerlab_color_tests tests/color_mask_tests.cpp)
-    target_link_libraries(triggerlab_color_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_color_tests COMMAND triggerlab_color_tests)
-    add_executable(triggerlab_region_tests tests/screen_capture_tests.cpp)
-    target_link_libraries(triggerlab_region_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_region_tests COMMAND triggerlab_region_tests)
-    if(WIN32)
-        add_executable(triggerlab_click_pulse_tests tests/win32_click_pulse_tests.cpp)
-        target_compile_definitions(triggerlab_click_pulse_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_link_libraries(triggerlab_click_pulse_tests PRIVATE triggerlab_core user32)
-        add_test(NAME triggerlab_click_pulse_tests COMMAND triggerlab_click_pulse_tests)
-        add_test(NAME triggerlab_input_recovery COMMAND TriggerLabCapturePreview --input-recovery-test)
-        set_tests_properties(triggerlab_input_recovery PROPERTIES TIMEOUT 10 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_target_sequence COMMAND TriggerLabCapturePreview --target-sequence-test)
-        set_tests_properties(triggerlab_target_sequence PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_help_popup COMMAND TriggerLabCapturePreview --help-popup-test)
-        set_tests_properties(triggerlab_help_popup PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 10 RUN_SERIAL TRUE)
-        set_tests_properties(triggerlab_click_pulse_tests PROPERTIES TIMEOUT 15)
-        add_executable(triggerlab_image_file_tests tests/win32_image_file_tests.cpp)
-        target_compile_definitions(triggerlab_image_file_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_link_libraries(triggerlab_image_file_tests PRIVATE triggerlab_capture windowscodecs ole32)
-        add_test(NAME triggerlab_image_file_tests COMMAND triggerlab_image_file_tests)
-        add_executable(TriggerLabImageCheck tests/win32_image_check.cpp)
-        target_compile_definitions(TriggerLabImageCheck PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_link_libraries(TriggerLabImageCheck PRIVATE triggerlab_capture)
-        add_test(NAME triggerlab_image_check_tests COMMAND TriggerLabImageCheck --self-test)
-        add_executable(triggerlab_capture_tests tests/win32_capture_tests.cpp)
-        target_compile_definitions(triggerlab_capture_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_link_libraries(triggerlab_capture_tests PRIVATE triggerlab_capture user32 gdi32 dwmapi)
-        add_test(NAME triggerlab_color_preview_smoke COMMAND TriggerLabCapturePreview --smoke-test)
-        add_test(NAME triggerlab_first_run COMMAND TriggerLabCapturePreview --first-run-test)
-        add_test(NAME triggerlab_window_picker COMMAND TriggerLabCapturePreview --window-picker-test)
-        set_tests_properties(triggerlab_window_picker PROPERTIES TIMEOUT 20 RUN_SERIAL TRUE)
-        # 32 DPI/mode/theme combinations repaint real windows. Local desktops
-        # can need over 100 seconds even when every check passes.
-        set_tests_properties(triggerlab_first_run PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_reference_capture COMMAND TriggerLabCapturePreview --reference-test)
-        set_tests_properties(triggerlab_reference_capture PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_guided_input COMMAND TriggerLabCapturePreview --guided-click-test)
-        set_tests_properties(triggerlab_guided_input PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_hover_input COMMAND TriggerLabCapturePreview --click-test)
-        set_tests_properties(triggerlab_hover_input PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_center_input COMMAND TriggerLabCapturePreview --center-click-test)
-        set_tests_properties(triggerlab_center_input PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15 RUN_SERIAL TRUE)
-        add_test(NAME triggerlab_pulse_input COMMAND TriggerLabCapturePreview --pulse-test)
-        set_tests_properties(triggerlab_pulse_input PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30 RUN_SERIAL TRUE)
-        set_tests_properties(triggerlab_color_preview_smoke PROPERTIES TIMEOUT 30)
-        add_test(NAME triggerlab_capture_tests COMMAND triggerlab_capture_tests)
-        set_tests_properties(triggerlab_capture_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
-        add_test(NAME triggerlab_gui_smoke COMMAND TriggerLabTrainer --smoke-test)
-        set_tests_properties(triggerlab_gui_smoke PROPERTIES TIMEOUT 15)
-    endif()
-endif()
-
-if(TRIGGERLAB_BUILD_TESTS)
     find_package(Threads REQUIRED)
-    add_executable(triggerlab_input_authorization_tests tests/input_authorization_tests.cpp)
-    target_link_libraries(triggerlab_input_authorization_tests PRIVATE triggerlab_core)
-    add_test(NAME triggerlab_input_authorization_tests COMMAND triggerlab_input_authorization_tests)
-    add_executable(triggerlab_atomic_writer_tests tests/atomic_writer_tests.cpp)
-    target_link_libraries(triggerlab_atomic_writer_tests PRIVATE triggerlab_core Threads::Threads)
-    add_test(NAME triggerlab_atomic_writer_tests COMMAND triggerlab_atomic_writer_tests)
+    function(triggerlab_add_test target source library)
+        add_executable(${target} ${source})
+        target_link_libraries(${target} PRIVATE ${library})
+        triggerlab_configure_target(${target})
+        add_test(NAME ${target} COMMAND ${target})
+    endfunction()
+
+    triggerlab_add_test(triggerlab_color_scene_tests tests/color_scene_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_training_profile_tests tests/training_profile_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_analyzer_tests tests/analyzer_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_image_color_tests tests/image_color_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_tests tests/core_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_config_tests tests/config_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_session_tests tests/session_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_color_click_tests tests/color_click_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_color_tests tests/color_mask_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_region_tests tests/screen_capture_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_input_authorization_tests tests/input_authorization_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_atomic_writer_tests tests/atomic_writer_tests.cpp triggerlab_core)
+    triggerlab_add_test(triggerlab_numeric_object_tests tests/numeric_object_tests.cpp triggerlab_core)
+    target_link_libraries(triggerlab_atomic_writer_tests PRIVATE Threads::Threads)
+    target_include_directories(triggerlab_numeric_object_tests PRIVATE src)
+
+    if(WIN32)
+        # Test hooks and native dialog probes are compiled only into this variant.
+        triggerlab_add_preview_library(triggerlab_preview_test_support)
+        target_compile_definitions(triggerlab_preview_test_support PUBLIC TRIGGERLAB_UI_TESTS)
+        add_executable(TriggerLabUiTests WIN32
+            tests/win32/PreviewTestMain.cpp
+            tests/win32/PreviewTestSupport.cpp
+            tests/win32/PreviewTests.cpp
+            tests/win32/PreviewIntegrationTests.cpp
+        )
+        target_link_libraries(TriggerLabUiTests PRIVATE triggerlab_preview_test_support)
+        triggerlab_configure_target(TriggerLabUiTests)
+
+        add_test(NAME triggerlab_input_recovery COMMAND TriggerLabUiTests --input-recovery-test)
+        set_tests_properties(triggerlab_input_recovery PROPERTIES TIMEOUT 10 RUN_SERIAL TRUE)
+        add_test(NAME triggerlab_target_sequence COMMAND TriggerLabUiTests --target-sequence-test)
+        set_tests_properties(triggerlab_target_sequence PROPERTIES TIMEOUT 20 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_help_popup COMMAND TriggerLabUiTests --help-popup-test)
+        set_tests_properties(triggerlab_help_popup PROPERTIES TIMEOUT 10 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_color_preview_smoke COMMAND TriggerLabUiTests --smoke-test)
+        set_tests_properties(triggerlab_color_preview_smoke PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+        add_test(NAME triggerlab_first_run COMMAND TriggerLabUiTests --first-run-test)
+        set_tests_properties(triggerlab_first_run PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+        add_test(NAME triggerlab_window_picker COMMAND TriggerLabUiTests --window-picker-test)
+        set_tests_properties(triggerlab_window_picker PROPERTIES TIMEOUT 20 RUN_SERIAL TRUE)
+        add_test(NAME triggerlab_reference_capture COMMAND TriggerLabUiTests --reference-test)
+        set_tests_properties(triggerlab_reference_capture PROPERTIES TIMEOUT 20 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_guided_input COMMAND TriggerLabUiTests --guided-click-test)
+        set_tests_properties(triggerlab_guided_input PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_hover_input COMMAND TriggerLabUiTests --click-test)
+        set_tests_properties(triggerlab_hover_input PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_center_input COMMAND TriggerLabUiTests --center-click-test)
+        set_tests_properties(triggerlab_center_input PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_test(NAME triggerlab_pulse_input COMMAND TriggerLabUiTests --pulse-test)
+        set_tests_properties(triggerlab_pulse_input PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
+        add_executable(TriggerLabTrainerTests WIN32 tests/win32/TrainerTestMain.cpp)
+        target_link_libraries(TriggerLabTrainerTests PRIVATE triggerlab_trainer)
+        triggerlab_configure_target(TriggerLabTrainerTests)
+        add_test(NAME triggerlab_gui_smoke COMMAND TriggerLabTrainerTests)
+        set_tests_properties(triggerlab_gui_smoke PROPERTIES TIMEOUT 15)
+
+        triggerlab_add_test(triggerlab_click_pulse_tests tests/win32_click_pulse_tests.cpp triggerlab_core)
+        target_link_libraries(triggerlab_click_pulse_tests PRIVATE user32)
+        set_tests_properties(triggerlab_click_pulse_tests PROPERTIES TIMEOUT 15)
+
+        triggerlab_add_test(triggerlab_image_file_tests tests/win32_image_file_tests.cpp triggerlab_capture)
+        target_link_libraries(triggerlab_image_file_tests PRIVATE windowscodecs ole32)
+        add_executable(TriggerLabImageCheck tests/win32_image_check.cpp)
+        target_link_libraries(TriggerLabImageCheck PRIVATE triggerlab_capture)
+        triggerlab_configure_target(TriggerLabImageCheck)
+        add_test(NAME triggerlab_image_check_tests COMMAND TriggerLabImageCheck --self-test)
+
+        triggerlab_add_test(triggerlab_capture_tests tests/win32_capture_tests.cpp triggerlab_capture)
+        target_link_libraries(triggerlab_capture_tests PRIVATE user32 gdi32 dwmapi)
+        set_tests_properties(triggerlab_capture_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+    endif()
 endif()

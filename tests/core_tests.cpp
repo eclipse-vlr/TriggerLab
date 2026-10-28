@@ -12,7 +12,7 @@ namespace {
 
 int checks = 0;
 
-void check(bool condition, const char* why) {
+void check(bool condition, const char *why) {
     ++checks;
     if (!condition) {
         std::cerr << "FAIL: " << why << '\n';
@@ -30,7 +30,12 @@ void testFrame() {
     frame.setIfInside(-1, 2, {200, 200, 200, 255});
     check(frame.at(0, 2).blue == 9, "clipped drawing");
     bool threw = false;
-    try { Frame invalid(0, 50); (void)invalid; } catch (const std::invalid_argument&) { threw = true; }
+    try {
+        Frame invalid(0, 50);
+        (void)invalid;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
     check(threw, "invalid frame dimensions rejected");
 }
 
@@ -44,12 +49,12 @@ void testDetector() {
 
     constexpr Pixel target{230, 65, 237, 255};
     for (int y = 17; y <= 24; ++y) {
-        for (int x = 17; x <= 24; ++x) frame.setIfInside(x, y, target);
+        for (int x = 17; x <= 24; ++x)
+            frame.setIfInside(x, y, target);
     }
     const Detection detection = detector.detect(frame, 20, 20);
     check(detection.found, "target detected at crosshair");
-    check(detection.matchingPixels == 64 && detection.samplePixels == 121,
-          "matching pixel counts");
+    check(detection.matchingPixels == 64 && detection.samplePixels == 121, "matching pixel counts");
     // 64/121 > 45%: the 8x8 target is sufficiently large for the default ROI.
 }
 
@@ -91,8 +96,7 @@ void testTriggerEngine() {
     engine.reset();
     check(engine.shotCount() == 0 && engine.state() == TriggerState::Idle, "reset counters");
     engine.setConfig({.cooldown = 1ms, .stableFrames = 100});
-    check(engine.config().cooldown == 50ms && engine.config().stableFrames == 20,
-          "engine config clamping");
+    check(engine.config().cooldown == 50ms && engine.config().stableFrames == 20, "engine config clamping");
 }
 
 void testSimulation() {
@@ -104,7 +108,7 @@ void testSimulation() {
     bool targetColoredPixelsPresent = false;
     for (int y = 0; y < frame.height() && !targetColoredPixelsPresent; ++y) {
         for (int x = 0; x < frame.width(); ++x) {
-            const auto& p = frame.at(x, y);
+            const auto &p = frame.at(x, y);
             if (p.red > 200 && p.blue > 200 && p.green < 100) {
                 targetColoredPixelsPresent = true;
                 break;
@@ -118,7 +122,8 @@ void testSimulation() {
     check(simulation.elapsedSeconds() <= 0.1 + 0.00001, "simulation delta clamped");
     simulation.onSimulatedShot();
     check(simulation.isHitFlashActive(), "simulated shot feedback begins");
-    for (int i = 0; i < 10; ++i) simulation.advance(0.05);
+    for (int i = 0; i < 10; ++i)
+        simulation.advance(0.05);
     check(!simulation.isHitFlashActive(), "simulated shot feedback expires");
     Frame tiny(16, 16);
     simulation.render(tiny);

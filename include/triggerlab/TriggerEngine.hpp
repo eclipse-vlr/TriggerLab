@@ -31,16 +31,22 @@ struct TriggerOutput {
 };
 
 class TriggerEngine {
-public:
+  public:
     explicit TriggerEngine(EngineConfig config = {});
     void setConfig(EngineConfig config) noexcept;
-    [[nodiscard]] const EngineConfig& config() const noexcept { return config_; }
+    [[nodiscard]] const EngineConfig &config() const noexcept {
+        return config_;
+    }
     [[nodiscard]] TriggerOutput step(TriggerInput input, Clock::time_point now) noexcept;
     void reset() noexcept;
-    [[nodiscard]] TriggerState state() const noexcept { return state_; }
-    [[nodiscard]] std::uint64_t shotCount() const noexcept { return shotCount_; }
+    [[nodiscard]] TriggerState state() const noexcept {
+        return state_;
+    }
+    [[nodiscard]] std::uint64_t shotCount() const noexcept {
+        return shotCount_;
+    }
 
-private:
+  private:
     EngineConfig config_;
     TriggerState state_ = TriggerState::Idle;
     Clock::time_point nextAllowedShot_{};

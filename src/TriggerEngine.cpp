@@ -4,11 +4,13 @@
 
 namespace triggerlab {
 
-TriggerEngine::TriggerEngine(EngineConfig config) { setConfig(config); }
+TriggerEngine::TriggerEngine(EngineConfig config) {
+    setConfig(config);
+}
 
 void TriggerEngine::setConfig(EngineConfig config) noexcept {
-    config.cooldown = std::clamp(config.cooldown, std::chrono::milliseconds{50},
-                                 std::chrono::milliseconds{2000});
+    config.cooldown =
+        std::clamp(config.cooldown, std::chrono::milliseconds{50}, std::chrono::milliseconds{2000});
     config.stableFrames = std::clamp(config.stableFrames, 1, 20);
     config_ = config;
 }
@@ -32,7 +34,8 @@ TriggerOutput TriggerEngine::step(TriggerInput input, Clock::time_point now) noe
         return {state_, false, shotCount_};
     }
 
-    if (consecutiveVisibleFrames_ < config_.stableFrames) ++consecutiveVisibleFrames_;
+    if (consecutiveVisibleFrames_ < config_.stableFrames)
+        ++consecutiveVisibleFrames_;
     if (consecutiveVisibleFrames_ < config_.stableFrames) {
         state_ = TriggerState::Detected;
         return {state_, false, shotCount_};

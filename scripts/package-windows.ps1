@@ -33,7 +33,6 @@ $quickstart = Get-Content -LiteralPath (Join-Path $repoRoot 'docs/QUICKSTART-RU.
 $quickstart = $quickstart.Replace('@VERSION@',$Version)
 [IO.File]::WriteAllText((Join-Path $packagePath 'README.txt'),$quickstart,[Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Destination $packagePath
-Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/trainer-validation.md') -Destination $packagePath
 $revision = & git -C $repoRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read Git revision' }
 $dirty = [bool](& git -C $repoRoot status --porcelain)
