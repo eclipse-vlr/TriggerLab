@@ -93,6 +93,9 @@ jobs:
       - name: Package portable preview
         shell: pwsh
         run: ./scripts/package-windows.ps1 -BuildDir build-production
+      - name: Verify extracted portable package
+        shell: pwsh
+        run: ./scripts/verify-windows-package.ps1
       - name: Upload distribution archive
         uses: actions/upload-artifact@v7
         with:
