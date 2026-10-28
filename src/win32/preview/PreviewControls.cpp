@@ -70,18 +70,18 @@ void PreviewWindow::createControls() {
     button(control::toggleProfiles, L"Профили", 574, 20, 120, 36);
     button(control::toggleDetails, L"Профили и диагностика", 24, 700, 500, 42);
     homeHint = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 24, 200, 500, 76, window,
-                             reinterpret_cast<HMENU>(control::homeHint), nullptr, nullptr);
+                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::homeHint)), nullptr, nullptr);
     homeSummary = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 24, 600, 500, 160, window,
-                                reinterpret_cast<HMENU>(control::homeSummary), nullptr, nullptr);
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::homeSummary)), nullptr, nullptr);
     headerStatus =
         CreateWindowW(L"STATIC", L"Остановлено · без кликов", WS_CHILD | WS_VISIBLE, 24, 110, 500, 26, window,
-                      reinterpret_cast<HMENU>(control::headerStatus), nullptr, nullptr);
+                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::headerStatus)), nullptr, nullptr);
     button(control::chooseWindow, L"Выбрать окно (3 сек.)", 40, 130, 260, 58);
     button(control::findKovaaks, L"Kovaak’s", 316, 130, 135);
     button(control::findAimlabs, L"Aimlabs", 316, 174, 135, 30);
     modeControl =
         CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 40, 210, 410,
-                      140, window, reinterpret_cast<HMENU>(control::detectionMode), nullptr, nullptr);
+                      140, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::detectionMode)), nullptr, nullptr);
     SendMessageW(modeControl, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Обнаружение вокруг прицела"));
     SendMessageW(modeControl, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Обнаружение под курсором"));
     button(control::startCapture, L"Начать захват", 548, 130, 250, 42);
@@ -89,10 +89,10 @@ void PreviewWindow::createControls() {
     button(control::guidedAction, L"Выбрать окно", 548, 130, 250, 42);
     dryControl = CreateWindowW(L"BUTTON", L"Проверять без кликов",
                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 548, 190, 235, 28,
-                               window, reinterpret_cast<HMENU>(control::dryRun), nullptr, nullptr);
+                               window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::dryRun)), nullptr, nullptr);
     autoControl = CreateWindowW(L"BUTTON", L"Включить триггер",
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 812, 190, 250, 28,
-                                window, reinterpret_cast<HMENU>(control::enableTrigger), nullptr, nullptr);
+                                window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::enableTrigger)), nullptr, nullptr);
     const wchar_t *settingsLabels[] = {L"Область, px", L"Исключить центр", L"Порог, %",     L"Сдвиг X, px",
                                        L"Сдвиг Y, px", L"Задержка, мс",    L"Интервал, мс", L"Нажатие, мс"};
     for (int i = 0; i < 8; ++i) {
@@ -108,11 +108,11 @@ void PreviewWindow::createControls() {
     button(control::saveAll, L"Сохранить всё", 844, 365, 218, 30);
     profileChoice =
         CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 40, 326, 366,
-                      180, window, reinterpret_cast<HMENU>(control::profileChoice), nullptr, nullptr);
+                      180, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::profileChoice)), nullptr, nullptr);
     button(control::loadProfile, L"Загрузить", 420, 326, 124, 30);
     profileName = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 560, 326, 328, 30,
-                                  window, reinterpret_cast<HMENU>(control::profileName), nullptr, nullptr);
+                                  window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::profileName)), nullptr, nullptr);
     SendMessageW(profileName, EM_LIMITTEXT, 60, 0);
     button(control::saveProfile, L"Сохранить профиль", 902, 326, 160, 30);
     SendMessageW(profileName, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Например: статичные мишени"));
@@ -135,7 +135,7 @@ void PreviewWindow::createControls() {
     button(control::targetReference, L"Снять мишень (3 сек.)", 40, 652, 220, 40);
     button(control::backgroundReference, L"Снять фон (3 сек.)", 276, 652, 220, 40);
     qualityInfo = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE, 520, 640, 540, 136, window,
-                                reinterpret_cast<HMENU>(control::qualityInfo), nullptr, nullptr);
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(control::qualityInfo)), nullptr, nullptr);
     colorHint = label(L"Выберите цвет мишени с экрана или из файла. Сохраните изменения кнопкой выше.", 160,
                       482, 625);
     EnumChildWindows(

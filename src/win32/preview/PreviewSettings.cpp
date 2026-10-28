@@ -1,6 +1,7 @@
 #include "ImagePaletteDialog.hpp"
 #include "StartupDiagnostics.hpp"
 #include "preview/PreviewWindow.hpp"
+#include "triggerlab/InputAuthorization.hpp"
 #include "triggerlab/ClickPermission.hpp"
 #include "triggerlab/ImageFile.hpp"
 #include <algorithm>
