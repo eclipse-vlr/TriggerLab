@@ -315,9 +315,10 @@ struct Editor {
         GetClientRect(window, &client);
         if (client.right <= 0 || client.bottom <= 0)
             return;
-        if(!backBuffer.ensure(dc,client.right,client.bottom)) throw std::runtime_error("Paint buffer unavailable");
+        if (!backBuffer.ensure(dc, client.right, client.bottom))
+            throw std::runtime_error("Paint buffer unavailable");
         render(backBuffer.dc());
-        BitBlt(dc,0,0,client.right,client.bottom,backBuffer.dc(),0,0,SRCCOPY);
+        BitBlt(dc, 0, 0, client.right, client.bottom, backBuffer.dc(), 0, 0, SRCCOPY);
     }
 };
 LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {

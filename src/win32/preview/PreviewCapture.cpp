@@ -1,6 +1,6 @@
+#include "ImagePaletteDialog.hpp"
 #include "preview/PreviewWindow.hpp"
 #include "triggerlab/ImageFile.hpp"
-#include "ImagePaletteDialog.hpp"
 #include <algorithm>
 #include <commdlg.h>
 #include <cwctype>

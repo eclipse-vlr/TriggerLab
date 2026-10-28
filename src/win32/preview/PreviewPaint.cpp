@@ -41,8 +41,9 @@ void PreviewWindow::paint(HDC target, RECT rect) {
     const int w = rect.right, h = rect.bottom;
     if (w <= 0 || h <= 0)
         return;
-    if (!backBuffer.ensure(target,w,h)) return;
-    HDC dc=backBuffer.dc();
+    if (!backBuffer.ensure(target, w, h))
+        return;
+    HDC dc = backBuffer.dc();
     SetDCBrushColor(dc, p.background);
     FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     SetBkMode(dc, TRANSPARENT);

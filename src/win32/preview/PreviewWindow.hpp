@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ClickPulse.hpp"
 #include "BackBuffer.hpp"
+#include "ClickPulse.hpp"
 #include "Theme.hpp"
 #include "WindowPickerDialog.hpp"
 #include "preview/ControlIds.hpp"
