@@ -6,4 +6,4 @@ struct InputAuthorization {
         return colorReady && !dirty && (dryRun || verified);
     }
 };
-}
+} // namespace triggerlab

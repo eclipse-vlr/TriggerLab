@@ -5,23 +5,29 @@
 
 namespace triggerlab {
 
-TargetDetector::TargetDetector(DetectorConfig config) { setConfig(config); }
+TargetDetector::TargetDetector(DetectorConfig config) {
+    setConfig(config);
+}
 
 void TargetDetector::setConfig(DetectorConfig config) noexcept {
     config.roiRadius = std::clamp(config.roiRadius, 0, 30);
-    config.minimumCoverage = std::isfinite(config.minimumCoverage)?std::clamp(config.minimumCoverage, 0.01, 1.0):.45;
+    config.minimumCoverage =
+        std::isfinite(config.minimumCoverage) ? std::clamp(config.minimumCoverage, 0.01, 1.0) : .45;
     config_ = config;
 }
 
-ColorMask TargetDetector::detectColor(const Frame& frame,int centerX,int centerY,const ColorMatchConfig& config) const {
-    if(!frame.contains(centerX,centerY)) return {};
-    const int radius=config_.roiRadius;
-    return makeColorMask(frame,{centerX-radius,centerY-radius,2*radius+1,2*radius+1},config);
+ColorMask TargetDetector::detectColor(const Frame &frame, int centerX, int centerY,
+                                      const ColorMatchConfig &config) const {
+    if (!frame.contains(centerX, centerY))
+        return {};
+    const int radius = config_.roiRadius;
+    return makeColorMask(frame, {centerX - radius, centerY - radius, 2 * radius + 1, 2 * radius + 1}, config);
 }
 
-Detection TargetDetector::detect(const Frame& frame, int centerX, int centerY) const noexcept {
+Detection TargetDetector::detect(const Frame &frame, int centerX, int centerY) const noexcept {
     Detection result;
-    if (!frame.contains(centerX, centerY)) return result;
+    if (!frame.contains(centerX, centerY))
+        return result;
 
     const int left = std::max(0, centerX - config_.roiRadius);
     const int right = std::min(frame.width() - 1, centerX + config_.roiRadius);
@@ -30,7 +36,7 @@ Detection TargetDetector::detect(const Frame& frame, int centerX, int centerY) c
 
     for (int y = top; y <= bottom; ++y) {
         for (int x = left; x <= right; ++x) {
-            const Pixel& p = frame.at(x, y);
+            const Pixel &p = frame.at(x, y);
             ++result.samplePixels;
             if (p.red >= config_.minimumRed && p.blue >= config_.minimumBlue &&
                 p.green <= config_.maximumGreen) {
