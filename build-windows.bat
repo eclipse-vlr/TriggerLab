@@ -10,7 +10,7 @@ if errorlevel 1 (
 set "TRIGGERLAB_LOG=%CD%\build-windows.log"
 echo Building TriggerLab. This may take several minutes.
 echo Build output: "%TRIGGERLAB_LOG%"
-call :build >"%TRIGGERLAB_LOG%" 2>&1
+call :build %* >"%TRIGGERLAB_LOG%" 2>&1
 set "TRIGGERLAB_RESULT=%ERRORLEVEL%"
 type "%TRIGGERLAB_LOG%"
 if not "%TRIGGERLAB_RESULT%"=="0" goto failed
@@ -36,7 +36,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [1/3] Configuring Visual Studio 2022 x64...
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 %*
 if errorlevel 1 (
     echo ERROR: Configuration failed.
     echo Install Visual Studio 2022 or Build Tools 2022 with:

@@ -1,4 +1,15 @@
-namespace {
+#include "PreviewTestHarness.hpp"
+#include "ImagePaletteDialog.hpp"
+#include "triggerlab/ImageFile.hpp"
+#include <commctrl.h>
+#include <dwmapi.h>
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <fstream>
+#include <iostream>
+
+namespace triggerlab::win32 {
 struct ClickTestTarget {
     COLORREF color=RGB(231,67,19);
     int downs=0,ups=0;
@@ -20,13 +31,13 @@ LRESULT CALLBACK clickTestProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp) 
     return DefWindowProcW(hwnd,message,wp,lp);
 }
 // Real capture and pulse scheduling, inert input sender: no desktop clicks.
-int rapidTargetTest(Preview& app) {
+int PreviewTestHarness::rapidTargetTest(PreviewTestHarness& app) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
     std::ofstream report(std::filesystem::path(executable).parent_path()/L"target-sequence-test-report.txt");
     report<<std::unitbuf;
     POINT cursor{};
-    if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: physical input held\n";return 77;}
+    if(!GetCursorPos(&cursor) || PreviewTestHarness::inputHeld()) {report<<"SKIP: physical input held\n";return 77;}
     MONITORINFO monitor{sizeof(monitor)};
     if(!GetMonitorInfoW(MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST),&monitor)) return 77;
     // The real cursor must stay in the selected window for the input guard.
@@ -42,7 +53,7 @@ int rapidTargetTest(Preview& app) {
     HWND target=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab target sequence test",WS_POPUP|WS_VISIBLE,x,y,sceneSide,sceneSide,nullptr,nullptr,wc.hInstance,&state);
     if(!target) return 77;
     struct Cleanup {
-        Preview& app;HWND target,previous;
+        PreviewTestHarness& app;HWND target,previous;
         ~Cleanup() {
             const bool restore=GetForegroundWindow()==target;
             app.stop();app.targetWindow=nullptr;DestroyWindow(target);
@@ -79,7 +90,7 @@ int rapidTargetTest(Preview& app) {
         const auto deadline=triggerlab::Clock::now()+1500ms;
         while(!predicate() && triggerlab::Clock::now()<deadline) {
             POINT current{};
-            if(!GetCursorPos(&current) || current.x!=cursor.x || current.y!=cursor.y || GetForegroundWindow()!=target || Preview::inputHeld() || !app.permittedRegion(*roi)) {stable=false;return false;}
+            if(!GetCursorPos(&current) || current.x!=cursor.x || current.y!=cursor.y || GetForegroundWindow()!=target || PreviewTestHarness::inputHeld() || !app.permittedRegion(*roi)) {stable=false;return false;}
             const auto sampleStarted=triggerlab::Clock::now();app.update();
             report<<"sample_ms="<<std::chrono::duration_cast<std::chrono::milliseconds>(triggerlab::Clock::now()-sampleStarted).count()
                 <<" dwell_ms="<<app.gate.elapsed(triggerlab::Clock::now()).count()<<'\n';
@@ -106,12 +117,12 @@ int rapidTargetTest(Preview& app) {
     report<<"PASS: six targets, loss during 150ms pulse, no cursor movement, balanced fake input\n";
     return 0;
 }
-int referenceCaptureTest(Preview& app) {
+int PreviewTestHarness::referenceCaptureTest(PreviewTestHarness& app) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
     std::ofstream report(std::filesystem::path(executable).parent_path()/L"reference-test-report.txt");
     POINT cursor{};
-    if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: physical input held or cursor unavailable\n";return 77;}
+    if(!GetCursorPos(&cursor) || PreviewTestHarness::inputHeld()) {report<<"SKIP: physical input held or cursor unavailable\n";return 77;}
     const HWND previous=GetForegroundWindow();
     MONITORINFO monitor{sizeof(monitor)};
     if(!GetMonitorInfoW(MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST),&monitor)) {report<<"SKIP: monitor unavailable\n";return 77;}
@@ -125,7 +136,7 @@ int referenceCaptureTest(Preview& app) {
     HWND target=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"TriggerLab reference capture test",WS_POPUP|WS_VISIBLE,x,y,240,240,nullptr,nullptr,wc.hInstance,&state);
     if(!target) {report<<"SKIP: test window unavailable\n";return 77;}
     struct Cleanup {
-        Preview& app;HWND target,previous,blocker=nullptr;
+        PreviewTestHarness& app;HWND target,previous,blocker=nullptr;
         ~Cleanup() {
             const HWND foreground=GetForegroundWindow();const bool restore=foreground==target || foreground==blocker || foreground==app.window;
             app.stop();app.clearReferences();app.targetWindow=nullptr;app.targetProcess=0;
@@ -167,7 +178,7 @@ int referenceCaptureTest(Preview& app) {
             if(GetForegroundWindow()!=target) {report<<"foreground_changed=1\n";return 77;}
             // References sample the client center, so pointer movement outside
             // the ROI is harmless. A pointer overlay over the ROI is not.
-            if(!GetCursorPos(&current) || Preview::inputHeld() || (std::abs(current.x-(roi->x+roi->width/2))<80 && std::abs(current.y-(roi->y+roi->height/2))<80)) {report<<"physical_input_or_pointer_overlay=1\n";return 77;}
+            if(!GetCursorPos(&current) || PreviewTestHarness::inputHeld() || (std::abs(current.x-(roi->x+roi->width/2))<80 && std::abs(current.y-(roi->y+roi->height/2))<80)) {report<<"physical_input_or_pointer_overlay=1\n";return 77;}
             pump();Sleep(10);
         }
         return app.aimPickDeadline?2:0;
@@ -175,7 +186,7 @@ int referenceCaptureTest(Preview& app) {
     const auto countdownStart=GetTickCount64();
     if(!start(31)) return app.status==L"F9 занят: снимок не начат"?skip("F9 unavailable"):fail("target snapshot did not start");
     const ULONGLONG firstDeadline=app.aimPickDeadline;
-    if(app.snapshotPurpose!=Preview::SnapshotPurpose::Target || firstDeadline<countdownStart+3000 || firstDeadline>GetTickCount64()+3000 || app.autoClick) return fail("target countdown or input state");
+    if(app.snapshotPurpose!=PreviewTestHarness::SnapshotPurpose::Target || firstDeadline<countdownStart+3000 || firstDeadline>GetTickCount64()+3000 || app.autoClick) return fail("target countdown or input state");
     if(GetForegroundWindow()!=target) return fail("snapshot did not automatically activate the selected window");
     const auto firstStart=triggerlab::Clock::now();const int firstWait=waitForSnapshot();
     if(firstWait) return firstWait==77?skip("input or foreground changed during target capture"):fail("target timer did not finish");
@@ -189,7 +200,7 @@ int referenceCaptureTest(Preview& app) {
     if(!probe.frame || triggerlab::aimColorMask(*probe.frame,app.color,app.settings).coverage!=0) return skip("background pixels unavailable or covered");
     if(!start(32)) return fail("background snapshot did not start");
     const auto secondDeadline=app.aimPickDeadline;
-    if(app.snapshotPurpose!=Preview::SnapshotPurpose::Background) return fail("background countdown purpose incorrect");
+    if(app.snapshotPurpose!=PreviewTestHarness::SnapshotPurpose::Background) return fail("background countdown purpose incorrect");
     if(GetForegroundWindow()!=target) return fail("background snapshot did not automatically activate the selected window");
     const int secondWait=waitForSnapshot();
     if(secondWait) return secondWait==77?skip("input or foreground changed during background capture"):fail("background timer did not finish");
@@ -228,7 +239,7 @@ int referenceCaptureTest(Preview& app) {
         }
         return true;
     };
-    if(!start(20) || app.snapshotPurpose!=Preview::SnapshotPurpose::Color || GetForegroundWindow()!=target) return fail("color snapshot did not automatically activate the selected window");
+    if(!start(20) || app.snapshotPurpose!=PreviewTestHarness::SnapshotPurpose::Color || GetForegroundWindow()!=target) return fail("color snapshot did not automatically activate the selected window");
     const auto colorDeadline=app.aimPickDeadline;SendMessageW(app.window,WM_HOTKEY,9,0);app.selectionTick(colorDeadline+1);
     if(app.aimPickDeadline || !sameTarget() || app.color.target.red!=231) return fail("cancelled color snapshot changed state");
     EnableWindow(target,FALSE);
@@ -261,13 +272,13 @@ int referenceCaptureTest(Preview& app) {
     report<<"PASS: focus loss, black frame, F9 cancellation, no input, unchanged display and closed-window cleanup\n";
     return 0;
 }
-int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stress=false) {
+int PreviewTestHarness::liveClickTest(PreviewTestHarness& app,bool centerMode,bool guided,bool stress) {
     using namespace std::chrono_literals;
     wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
     std::ofstream report(std::filesystem::path(executable).parent_path()/(stress?L"pulse-test-report.txt":guided?L"guided-test-report.txt":centerMode?L"center-test-report.txt":L"click-test-report.txt"));
     report<<std::unitbuf<<"stage=setup guided="<<guided<<"\n";
     POINT cursor{};
-    if(!GetCursorPos(&cursor) || Preview::inputHeld()) {report<<"SKIP: cursor unavailable or physical input held\n";return 77;}
+    if(!GetCursorPos(&cursor) || PreviewTestHarness::inputHeld()) {report<<"SKIP: cursor unavailable or physical input held\n";return 77;}
     HWND previous=GetForegroundWindow();ClickTestTarget state;state.crosshair=centerMode;
     WNDCLASSW wc{};wc.hInstance=GetModuleHandleW(nullptr);wc.lpfnWndProc=clickTestProcedure;wc.lpszClassName=L"TriggerLabHoverInputTest";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
     if(!RegisterClassW(&wc) && GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) return 2;
@@ -301,7 +312,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
         app.syncSettings();app.syncColor();if(!app.saveAll()) return 2;app.running=true;
         if(guided) {
             report<<"stage=save-guided-settings\n";
-            app.syncSettings();app.syncColor();app.command(3);if(!app.saveAll()) {app.stop();DestroyWindow(target);return 2;}
+            app.syncSettings();app.syncColor();app.command(control::applyColor);if(!app.saveAll()) {app.stop();DestroyWindow(target);return 2;}
             // Selecting a color focuses the analyzer; resume only our own test scene.
             SetForegroundWindow(target);SetActiveWindow(target);SetFocus(target);
         }
@@ -312,7 +323,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
         if(!reference) app.running=false;
         const auto before=app.diagnosticCount;
         if(guided && reference) {report<<"stage=arm-diagnostic\n";app.guidedAction();}
-        else {SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(8);}
+        else {SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(control::enableTrigger);}
         if(!reference) {report<<"SKIP: test reference pixels unavailable or covered by a desktop/pointer overlay\n";result=77;}
         else if(!app.autoClick) {report<<"SKIP: F9 unavailable\n";result=77;}
         else {
@@ -344,7 +355,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
             report<<"dry_run="<<dryPassed<<" center_mode="<<centerMode<<"\n";
             report<<"stable="<<dryStable<<" before="<<before<<" verified="<<app.verified<<" step="<<app.wizardStep()<<" ready="<<app.colorReady<<" diagnostic_mode="<<app.settings.dryRun<<" downs="<<state.downs<<" ups="<<state.ups<<"\n";
             const auto p=app.sample.cursorPixel?*app.sample.cursorPixel:app.sample.frame?app.sample.frame->at(app.sample.frame->width()/2,app.sample.frame->height()/2):triggerlab::Pixel{};
-            report<<"dry rgb="<<int(p.red)<<","<<int(p.green)<<","<<int(p.blue)<<" mask="<<app.mask.coverage<<" held="<<Preview::inputHeld()<<" diagnostics="<<app.diagnosticCount<<" foreground="<<(GetForegroundWindow()==target)<<"\n";
+            report<<"dry rgb="<<int(p.red)<<","<<int(p.green)<<","<<int(p.blue)<<" mask="<<app.mask.coverage<<" held="<<PreviewTestHarness::inputHeld()<<" diagnostics="<<app.diagnosticCount<<" foreground="<<(GetForegroundWindow()==target)<<"\n";
             const int bytes=WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),nullptr,0,nullptr,nullptr);
             std::string reason(bytes,'\0');WideCharToMultiByte(CP_UTF8,0,app.clickStatus.data(),static_cast<int>(app.clickStatus.size()),reason.data(),bytes,nullptr,nullptr);report<<reason<<"\n";
             if(!dryPassed) {
@@ -453,7 +464,7 @@ int liveClickTest(Preview& app,bool centerMode=false,bool guided=false,bool stre
                     POINT point{};
                     if(!GetCursorPos(&point) || !app.permittedAt(point)) {stable=false;break;}
                     app.running=true;app.settings.dryRun=false;app.settings.clickMs=150;app.syncSettings();app.savedSettings=app.settings;app.verified=true;
-                    SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(8);
+                    SendMessageW(app.autoControl,BM_SETCHECK,BST_CHECKED,0);app.command(control::enableTrigger);
                     if(!app.autoClick) {stable=false;break;}
                     const auto deadline=triggerlab::Clock::now()+1000ms;
                     while(!app.syntheticDown && triggerlab::Clock::now()<deadline) {

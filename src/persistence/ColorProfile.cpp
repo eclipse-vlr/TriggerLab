@@ -1,11 +1,10 @@
 #include "triggerlab/ColorProfile.hpp"
-#include "triggerlab/Config.hpp"
-#include <charconv>
+#include "triggerlab/AtomicFile.hpp"
+#include "persistence/NumericObject.hpp"
 #include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <locale>
-#include <map>
 #include <sstream>
 
 namespace triggerlab {
@@ -27,40 +26,9 @@ std::string serializeColorProfile(const ColorMatchConfig& c) {
 
 ColorProfileResult deserializeColorProfile(std::string_view json) {
     auto fail=[] {return ColorProfileResult{{},false,"Invalid color profile"};};
-    std::size_t p=0;
-    auto ws=[&] {while(p<json.size() && (json[p]==' ' || json[p]=='\n' || json[p]=='\r' || json[p]=='\t')) ++p;};
-    auto take=[&](char c) {ws();if(p<json.size() && json[p]==c) {++p;return true;}return false;};
-    std::map<std::string,double> values;
-    if(!take('{')) return fail();
-    for(;;) {
-        if(!take('"')) return fail();
-        const auto keyStart=p;
-        while(p<json.size() && ((json[p]>='a' && json[p]<='z') || json[p]=='_')) ++p;
-        std::string key(json.substr(keyStart,p-keyStart));
-        if(key.empty() || p>=json.size() || json[p++]!='"' || !take(':')) return fail();
-        ws();const auto numberStart=p;
-        if(p<json.size() && json[p]=='-') ++p;
-        if(p>=json.size() || json[p]<'0' || json[p]>'9') return fail();
-        if(json[p]=='0') ++p;
-        else while(p<json.size() && json[p]>='0' && json[p]<='9') ++p;
-        if(p<json.size() && json[p]=='.') {
-            const auto digits=++p;
-            while(p<json.size() && json[p]>='0' && json[p]<='9') ++p;
-            if(p==digits) return fail();
-        }
-        if(p<json.size() && (json[p]=='e' || json[p]=='E')) {
-            ++p;if(p<json.size() && (json[p]=='+' || json[p]=='-')) ++p;
-            const auto digits=p;
-            while(p<json.size() && json[p]>='0' && json[p]<='9') ++p;
-            if(p==digits) return fail();
-        }
-        double value=0;
-        const auto parsed=std::from_chars(json.data()+numberStart,json.data()+p,value);
-        if(parsed.ec!=std::errc{} || parsed.ptr!=json.data()+p || !std::isfinite(value) || !values.emplace(key,value).second) return fail();
-        if(take('}')) break;
-        if(!take(',')) return fail();
-    }
-    ws();if(p!=json.size()) return fail();
+    auto object=persistence::parseNumericObject<double>(json);
+    if(!object) return fail();
+    auto& values=*object;
     for(auto key:{"schema_version","red","green","blue","tolerance"}) {
         const auto it=values.find(key);
         if(it==values.end() || it->second<0 || it->second>255 || std::floor(it->second)!=it->second) return fail();

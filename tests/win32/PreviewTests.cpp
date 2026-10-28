@@ -1,12 +1,24 @@
-    bool inputRecoveryTest() {
+#include "PreviewTestHarness.hpp"
+#include "ImagePaletteDialog.hpp"
+#include "triggerlab/ImageFile.hpp"
+#include <commctrl.h>
+#include <dwmapi.h>
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <fstream>
+#include <iostream>
+
+namespace triggerlab::win32 {
+bool PreviewTestHarness::inputRecoveryTest() {
         // The advanced command must enforce the same policy as the wizard.
         targetWindow=window;targetProcess=GetCurrentProcessId();running=true;
         settings.dryRun=false;colorReady=false;verified=false;
-        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
+        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(control::enableTrigger);
         if(autoClick || syntheticDown) return false;
         colorReady=true;verified=true;
         SetWindowTextW(settingEdits[0],L"invalid");running=true;
-        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
+        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(control::enableTrigger);
         if(autoClick || syntheticDown) return false;
         syncSettings();color.space=triggerlab::ColorSpace::HSV;syncActions();
         if(IsWindowEnabled(colorEdits[3])) return false;
@@ -22,7 +34,7 @@
         while(autoClick && triggerlab::Clock::now()<deadline) {finishClick();Sleep(1);}
         if(autoClick || !syntheticDown || !inputPulse.pendingRelease() || recoveryDowns!=1 || recoveryUps!=0) return false;
         SendMessageW(window,WM_HOTKEY,9,0);
-        if(running || autoClick || !syntheticDown || !IsWindowEnabled(GetDlgItem(window,2))) return false;
+        if(running || autoClick || !syntheticDown || !IsWindowEnabled(GetDlgItem(window,control::stop))) return false;
         if(inputPulse.start(5) || recoveryDowns!=1) return false;
         rejectRecoveryUp=false;
         SendMessageW(window,WM_HOTKEY,9,0);
@@ -38,7 +50,8 @@
         std::cout<<"PASS: failed Up remains pending, blocks Down and recovers through Stop/F9 and the service timer\n";
         return true;
     }
-    bool windowPickerTest() {
+
+bool PreviewTestHarness::windowPickerTest() {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"window-picker-test-report.txt");
         if(!triggerlab::windowPickerDialogSmoke()) {report<<"FAIL: window picker enumeration, selection or layout\n";return false;}
@@ -61,8 +74,9 @@
         report<<(passed?"PASS":"FAIL")<<": enumeration with title/application, both themes, 100-200% DPI, empty list, cancel, stale window/process, manual fallback and input reset\n";
         return passed;
     }
-    bool scrollPaintTest(std::ostream& report) {
-        struct Probe {Preview& app;int erases=0,paints=0;std::vector<std::string> events;} probe{*this,0,0,{}};
+
+bool PreviewTestHarness::scrollPaintTest(std::ostream& report) {
+        struct Probe {PreviewTestHarness& app;int erases=0,paints=0;std::vector<std::string> events;} probe{*this,0,0,{}};
         const auto callback=+[](HWND child,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR context)->LRESULT {
             auto& probe=*reinterpret_cast<Probe*>(context);
             if(probe.app.arranging) {
@@ -86,7 +100,8 @@
         for(const auto& event:probe.events) report<<event<<'\n';
         return probe.erases==0 && probe.paints==0;
     }
-    bool helpTooltipsTest(std::ostream& report) {
+
+bool PreviewTestHarness::helpTooltipsTest(std::ostream& report) {
         report<<"tooltip tools="<<SendMessageW(tooltip,TTM_GETTOOLCOUNT,0,0)<<'\n';
         if(!tooltip || !colorHelp || !IsWindowVisible(colorHelp)) return false;
         for(int index=0;index<9;++index) {
@@ -100,7 +115,8 @@
         return SendMessageW(tooltip,TTM_GETDELAYTIME,TTDT_INITIAL,0)==400 &&
             SendMessageW(tooltip,TTM_GETDELAYTIME,TTDT_AUTOPOP,0)==20000;
     }
-    int helpPopupTest() {
+
+int PreviewTestHarness::helpPopupTest() {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"help-popup-test-report.txt");
         report<<std::unitbuf;
@@ -136,7 +152,8 @@
         }
         return 0;
     }
-    bool firstRunTest() {
+
+bool PreviewTestHarness::firstRunTest() {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"first-run-test-report.txt");
         report<<std::unitbuf;
@@ -149,8 +166,8 @@
         auto check=[&](bool value,const char* message) {if(!value) report<<message;return value;};
         MINMAXINFO minimum{};SendMessageW(window,WM_GETMINMAXINFO,0,reinterpret_cast<LPARAM>(&minimum));
         if(!check(minimum.ptMinTrackSize.y<800,"FAIL: small screens cannot resize the window\n")) return false;
-        RECT stopBefore{},stopAfter{};GetWindowRect(GetDlgItem(window,2),&stopBefore);
-        scroll(SB_VERT,SB_BOTTOM);GetWindowRect(GetDlgItem(window,2),&stopAfter);
+        RECT stopBefore{},stopAfter{};GetWindowRect(GetDlgItem(window,control::stop),&stopBefore);
+        scroll(SB_VERT,SB_BOTTOM);GetWindowRect(GetDlgItem(window,control::stop),&stopAfter);
         if(!check(EqualRect(&stopBefore,&stopAfter),"FAIL: Stop scrolls out of view\n")) return false;
         scroll(SB_VERT,SB_TOP);
         const UINT actualDpi=dpi;RECT original{};GetWindowRect(window,&original);
@@ -217,12 +234,12 @@
         if(!target) return false;
         targetWindow=target;GetWindowThreadProcessId(target,&targetProcess);
         const bool selected=wizardStep()==1;
-        command(34);const bool expanded=homeDetails && IsWindowVisible(profileChoice);
-        command(34);if(!check(expanded && !homeDetails && !IsWindowVisible(profileChoice) && wizardStep()==1 && !running && !autoClick,"FAIL: home tools toggle changes workflow\n")) {DestroyWindow(target);return false;}
+        command(control::toggleDetails);const bool expanded=homeDetails && IsWindowVisible(profileChoice);
+        command(control::toggleDetails);if(!check(expanded && !homeDetails && !IsWindowVisible(profileChoice) && wizardStep()==1 && !running && !autoClick,"FAIL: home tools toggle changes workflow\n")) {DestroyWindow(target);return false;}
         const bool saved=saveAll();
         const bool stillNeedsColor=wizardStep()==1 && !colorReady && !std::filesystem::exists(colorPath);
         if(!selected || !saved || !stillNeedsColor) {DestroyWindow(target);report<<"FAIL: saving defaults completes color selection\n";return false;}
-        {Preview beforeColor(settingsPath.parent_path());if(beforeColor.colorReady) {DestroyWindow(target);report<<"FAIL: restart falsely restores an unchosen color\n";return false;}}
+        {PreviewTestHarness beforeColor(settingsPath.parent_path());if(beforeColor.colorReady) {DestroyWindow(target);report<<"FAIL: restart falsely restores an unchosen color\n";return false;}}
         SetWindowTextW(profileName,L"Ещё без цвета");saveProfile();
         if(!profiles.empty()) {DestroyWindow(target);report<<"FAIL: incomplete profile saved\n";return false;}
         triggerlab::CaptureSample picked;picked.status=triggerlab::CaptureStatus::Ok;picked.frame.emplace(1,1);picked.cursorPosition=triggerlab::CapturePoint{-100000,-100000};
@@ -230,7 +247,7 @@
         acceptSample(std::move(picked),true);
         if(!colorReady || wizardStep()!=2 || !saveAll() || colorDirty() || settingsDirty()) {DestroyWindow(target);return false;}
         if(!feedbackTest()) {DestroyWindow(target);report<<"FAIL: feedback states or presentation changed input\n";return false;}
-        if(RegisterHotKey(window,9,MOD_NOREPEAT,VK_F9)) {
+        if(RegisterHotKey(window,hotkey::stop,MOD_NOREPEAT,VK_F9)) {
             autoClick=true;settings.dryRun=true;
             guidedAction();const bool first=autoClick && settings.dryRun;
             guidedAction();const bool repeated=autoClick && settings.dryRun;stop();
@@ -243,11 +260,11 @@
         const bool invalidRejected=!saveAll() && settings.advancedMode && GetFocus()==settingEdits[5] && !running && !autoClick;
         SetWindowTextW(settingEdits[5],L"70");saveAll();
         if(!invalidRejected) {DestroyWindow(target);report<<"FAIL: invalid hidden field remains hidden/unfocused\n";return false;}
-        for(bool dark:{false,true}) {settings.darkTheme=dark;applyTheme();for(int i=0;i<2;++i) {command(23);if(colorDirty() || settingsDirty()) {DestroyWindow(target);return false;}}}
+        for(bool dark:{false,true}) {settings.darkTheme=dark;applyTheme();for(int i=0;i<2;++i) {command(control::toggleAdvanced);if(colorDirty() || settingsDirty()) {DestroyWindow(target);return false;}}}
         settings.advancedMode=false;layoutMode();std::string error;if(!persistSettings(error)) {DestroyWindow(target);return false;}
         stage("restart and profile drafts");
         const auto root=settingsPath.parent_path();
-        Preview restarted(root);
+        PreviewTestHarness restarted(root);
         HWND freshWindow=CreateWindowW(L"TriggerLabCapturePreviewClass",L"First-run restart",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,0,0,1120,980,nullptr,nullptr,GetModuleHandleW(nullptr),&restarted);
         bool restored=freshWindow && restarted.profiles.size()==1 && !restarted.running && !restarted.autoClick && restarted.settings.dryRun && !restarted.verified;
         if(freshWindow) {
@@ -261,7 +278,8 @@
         const bool passed=restored && std::filesystem::exists(savedPath);
         report<<(passed?"PASS: cold launch, explicit color, validation, save/restart/load, drafts and both themes\n":"FAIL: restart/profile load\n");return passed;
     }
-    bool feedbackTest() {
+
+bool PreviewTestHarness::feedbackTest() {
         // Isolated first-run settings and explicit focus/input observations keep
         // these presentation checks independent of desktop input and capture.
         const auto originalClicks=clickCount,originalDiagnostics=diagnosticCount;
@@ -300,7 +318,8 @@
         stop();verified=false;settings.dryRun=true;syncSettings();
         return check(FeedbackTone::Neutral,L"Нужна проверка цвета");
     }
-    bool smokeTest(const std::filesystem::path& path) {
+
+bool PreviewTestHarness::smokeTest(const std::filesystem::path& path) {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::ofstream report(std::filesystem::path(executable).parent_path()/L"smoke-test-report.txt");
         auto fail=[&](int line) {report<<"FAIL: preview smoke at line "<<line<<'\n';return false;};
@@ -318,9 +337,9 @@
         colorPath=path;
         settingsPath=path.parent_path()/L"analyzer-settings.json";
         const bool originalTheme=settings.darkTheme;
-        command(21);
+        command(control::toggleTheme);
         if(settings.darkTheme==originalTheme || triggerlab::loadAnalyzerSettings(settingsPath).darkTheme!=settings.darkTheme || running || autoClick) return fail(__LINE__);
-        command(21);
+        command(control::toggleTheme);
         if(settings.darkTheme!=originalTheme || triggerlab::loadAnalyzerSettings(settingsPath).darkTheme!=originalTheme) return fail(__LINE__);
         const wchar_t* analyzerValues[]={L"41",L"4",L"5",L"-20",L"10",L"100",L"80",L"40"};
         for(int i=0;i<8;++i) SetWindowTextW(settingEdits[i],analyzerValues[i]);
@@ -332,24 +351,24 @@
         for(auto edit:colorEdits) if(!IsWindow(edit)) return fail(__LINE__);
         const wchar_t* values[]={L"231",L"67",L"19",L"12"};
         for(int i=0;i<4;++i) SetWindowTextW(colorEdits[i],values[i]);
-        command(3);command(6);
+        command(control::applyColor);command(control::saveColor);
         const auto loaded=triggerlab::loadColorProfile(path);
         if(!loaded.ok || loaded.color.target.red!=231 || loaded.color.target.blue!=19 || loaded.color.channelTolerance!=12) return fail(__LINE__);
-        SetWindowTextW(colorEdits[0],L"999");command(6);
+        SetWindowTextW(colorEdits[0],L"999");command(control::saveColor);
         if(triggerlab::loadColorProfile(path).color.target.red!=231) return fail(__LINE__);
-        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(8);
+        SendMessageW(autoControl,BM_SETCHECK,BST_CHECKED,0);command(control::enableTrigger);
         if(autoClick || SendMessageW(autoControl,BM_GETCHECK,0,0)!=BST_UNCHECKED) return fail(__LINE__);
-        command(1);if(!running) return fail(__LINE__);command(2);
+        command(control::startCapture);if(!running) return fail(__LINE__);command(control::stop);
         // F9 keeps evidence of a failed run; a second Stop preserves it too.
-        command(1);runFrames=12;runAlignedFrames=2;runUnavailableFrames=3;runBestCoverage=.75;
+        command(control::startCapture);runFrames=12;runAlignedFrames=2;runUnavailableFrames=3;runBestCoverage=.75;
         runLastIssue=L"Область прицела перекрыта другим окном";
-        command(2);
+        command(control::stop);
         const auto stoppedResult=clickStatus;
         if(stoppedResult.find(L"Кадры: 12; в центре: 2; недоступны: 3; макс. цвет: 75%")!=0 ||
             stoppedResult.find(runLastIssue)==std::wstring::npos || running || autoClick || sample.frame) return fail(__LINE__);
-        command(2);if(clickStatus!=stoppedResult) return fail(__LINE__);
-        command(1);if(runFrames || runAlignedFrames || runUnavailableFrames || runBestCoverage || !runLastIssue.empty()) return fail(__LINE__);
-        command(2);
+        command(control::stop);if(clickStatus!=stoppedResult) return fail(__LINE__);
+        command(control::startCapture);if(runFrames || runAlignedFrames || runUnavailableFrames || runBestCoverage || !runLastIssue.empty()) return fail(__LINE__);
+        command(control::stop);
         // Exercise one-shot sampling with a known pixel, independently of Start
         // and of the desktop content / user's cursor. No OS input is sent.
         triggerlab::CaptureSample pixel;
@@ -368,17 +387,17 @@
         // Deadlines are injected to test cancellation even if another process owns F9.
         pickDeadline=GetTickCount64()+3000;
         selectionTick(pickDeadline-1001);
-        GetWindowTextW(GetDlgItem(window,5),field,32);
+        GetWindowTextW(GetDlgItem(window,control::pickCursorColor),field,32);
         if(std::wstring(field)!=L"Пипетка: 2 сек.") return fail(__LINE__);
-        command(6); // Saving cancels delayed overwrite.
+        command(control::saveColor); // Saving cancels delayed overwrite.
         if(pickDeadline || targetDeadline || !triggerlab::loadColorProfile(path).ok) return fail(__LINE__);
-        pickDeadline=GetTickCount64()+3000;targetDeadline=pickDeadline;command(2);
+        pickDeadline=GetTickCount64()+3000;targetDeadline=pickDeadline;command(control::stop);
         if(pickDeadline || targetDeadline) return fail(__LINE__);
         // The real button can start while stopped, or fail cleanly if F9 is busy.
-        command(5);
+        command(control::pickCursorColor);
         if(running || autoClick || targetDeadline) return fail(__LINE__);
         if(!pickDeadline && status!=L"F9 занят: выбор не начат") return fail(__LINE__);
-        command(2);
+        command(control::stop);
         // Decode a real file through the same import action used by the dialog.
         const auto imagePath=path.parent_path()/L"цвет.bmp";
         BITMAPFILEHEADER fileHeader{};fileHeader.bfType=0x4D42;fileHeader.bfOffBits=sizeof(BITMAPFILEHEADER)+sizeof(BITMAPINFOHEADER);fileHeader.bfSize=fileHeader.bfOffBits+12;
@@ -388,14 +407,14 @@
         for(bool advanced:{false,true}) {
             settings.advancedMode=advanced;layoutMode();pickDeadline=GetTickCount64()+3000;
             if(!importImage(imagePath) || pickDeadline || running || autoClick || color.target.red!=231 || color.target.blue!=19) return fail(__LINE__);
-            wchar_t saveCaption[64]{};const auto saveButton=GetDlgItem(window,24);GetWindowTextW(saveButton,saveCaption,64);
+            wchar_t saveCaption[64]{};const auto saveButton=GetDlgItem(window,control::saveAll);GetWindowTextW(saveButton,saveCaption,64);
             // The smoke-test owner is hidden; check the control's own visibility flag.
             if(!(GetWindowLongW(saveButton,GWL_STYLE)&WS_VISIBLE) || !saveCaption[0] || status.find(L"«"+std::wstring(saveCaption)+L"»")==std::wstring::npos) {
                 report<<"FAIL: imported color suggests an unavailable save action\n";return fail(__LINE__);
             }
         }
         settings.advancedMode=false;layoutMode();
-        command(6);if(triggerlab::loadColorProfile(path).color.target.red!=231) return fail(__LINE__);
+        command(control::saveColor);if(triggerlab::loadColorProfile(path).color.target.red!=231) return fail(__LINE__);
         if(importImage(path) || color.target.red!=231 || autoClick) return fail(__LINE__); // JSON is not an image.
         HWND test=CreateWindowW(L"STATIC",L"Test window title",WS_OVERLAPPED,0,0,240,240,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
         if(!test) return fail(__LINE__);
@@ -429,23 +448,23 @@
         SendMessageW(window,WM_HOTKEY,9,0);
         if(aimPickDeadline || snapshotPurpose!=SnapshotPurpose::Color || autoClick || !targetReference) {DestroyWindow(test);return fail(__LINE__);}
         const auto previousColor=color.target;
-        command(20);
+        command(control::pickAimColor);
         if(aimPickDeadline || autoClick || status!=L"Выбранное окно недоступно для активации") {DestroyWindow(test);return fail(__LINE__);}
         cancelSelection();
         if(aimPickDeadline || color.target.red!=previousColor.red || color.target.green!=previousColor.green || color.target.blue!=previousColor.blue) {DestroyWindow(test);return fail(__LINE__);}
-        settings.center=false;command(20);
+        settings.center=false;command(control::pickAimColor);
         if(aimPickDeadline) {DestroyWindow(test);return fail(__LINE__);}
         settings.center=true;
         colorReady=false;verified=false;if(wizardStep()!=1) {DestroyWindow(test);return fail(__LINE__);}
         colorReady=true;if(wizardStep()!=2) {DestroyWindow(test);return fail(__LINE__);}
         verified=true;if(wizardStep()!=3) {DestroyWindow(test);return fail(__LINE__);}
-        wchar_t caption[256]{};GetWindowTextW(GetDlgItem(window,7),caption,256);
+        wchar_t caption[256]{};GetWindowTextW(GetDlgItem(window,control::chooseWindow),caption,256);
         bool labels=std::wstring(caption).find(L"Test window title")!=std::wstring::npos;
-        SetWindowTextW(test,L"Renamed target");refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
+        SetWindowTextW(test,L"Renamed target");refreshTargetButton();GetWindowTextW(GetDlgItem(window,control::chooseWindow),caption,256);
         labels=labels && std::wstring(caption).find(L"Renamed target")!=std::wstring::npos;
-        DestroyWindow(test);refreshTargetButton();GetWindowTextW(GetDlgItem(window,7),caption,256);
+        DestroyWindow(test);refreshTargetButton();GetWindowTextW(GetDlgItem(window,control::chooseWindow),caption,256);
         labels=labels && !targetWindow && std::wstring(caption).find(L"не выбрано")!=std::wstring::npos;
-        command(20); // A closed target cannot start a delayed snapshot.
+        command(control::pickAimColor); // A closed target cannot start a delayed snapshot.
         if(!labels || running || autoClick || sample.frame || pickDeadline || targetDeadline || aimPickDeadline || wizardStep()!=0) return fail(__LINE__);
         SetWindowTextW(colorEdits[0],L"222");
         if(!colorDirty() || verified || !saveAll() || colorDirty() || settingsDirty()) return fail(__LINE__);
@@ -454,7 +473,7 @@
         if(color.space!=triggerlab::ColorSpace::HSV || !colorDirty() || verified) return fail(__LINE__);
         color.hueTolerance=17.5;color.saturationTolerance=.123456789;color.valueTolerance=.23456789;color.minimumCoverage=.27;
         if(!saveAll() || colorDirty()) return fail(__LINE__);
-        {Preview restarted(settingsPath.parent_path());if(!sameColor(restarted.color,color) || !restarted.settings.dryRun) return fail(__LINE__);}
+        {PreviewTestHarness restarted(settingsPath.parent_path());if(!sameColor(restarted.color,color) || !restarted.settings.dryRun) return fail(__LINE__);}
         color=rgbBefore;syncColor();if(!saveAll()) return fail(__LINE__);
         SetWindowTextW(profileName,L"Проверка профиля");saveProfile();
         if(profiles.size()!=1 || profiles[0].name.empty() || profileChanged()) return fail(__LINE__);
@@ -464,7 +483,8 @@
         if(color.target.red!=111 || !colorDirty()) return fail(__LINE__);
         SetWindowTextW(colorEdits[0],L"111");verified=true;loadProfile();
         if(color.target.red!=222 || verified || !settings.dryRun || running || autoClick || colorDirty() || settingsDirty() || profileChanged()) return fail(__LINE__);
-        const bool originalAdvanced=settings.advancedMode;command(23);
+        const bool originalAdvanced=settings.advancedMode;command(control::toggleAdvanced);
         if(settings.advancedMode==originalAdvanced || triggerlab::loadAnalyzerSettings(settingsPath).advancedMode!=settings.advancedMode) return fail(__LINE__);
-        command(23);return settings.advancedMode==originalAdvanced && !running && !autoClick;
+        command(control::toggleAdvanced);return settings.advancedMode==originalAdvanced && !running && !autoClick;
     }
+}

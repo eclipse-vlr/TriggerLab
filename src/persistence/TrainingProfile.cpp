@@ -1,5 +1,5 @@
 #include "triggerlab/TrainingProfile.hpp"
-#include "triggerlab/Config.hpp"
+#include "triggerlab/AtomicFile.hpp"
 #include <fstream>
 #include <sstream>
 #include <iomanip>

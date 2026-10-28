@@ -16,5 +16,7 @@ struct WindowPickerResult {
 };
 bool windowChoiceAvailable(const WindowChoice& choice,HWND owner);
 WindowPickerResult showWindowPicker(HWND owner,bool dark,HWND current);
+#ifdef TRIGGERLAB_UI_TESTS
 bool windowPickerDialogSmoke();
+#endif
 }

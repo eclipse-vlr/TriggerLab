@@ -19,7 +19,7 @@ jobs:
       - name: Build, test and verify batch-launched window
         shell: pwsh
         run: |
-          & $env:ComSpec /d /c 'call build-windows.bat <nul'
+          & $env:ComSpec /d /c 'call build-windows.bat -DTRIGGERLAB_WARNINGS_AS_ERRORS=ON <nul'
           if ($LASTEXITCODE -ne 0) { throw "Batch script failed: $LASTEXITCODE" }
           $executable = Join-Path $env:GITHUB_WORKSPACE 'build\Release\TriggerLab.exe'
           $apps = @(Get-Process -Name TriggerLab -ErrorAction SilentlyContinue |
@@ -65,19 +65,34 @@ jobs:
             build/Release/*test-report.txt
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify production build without test code
+        shell: pwsh
+        run: |
+          cmake -S . -B build-production -G "Visual Studio 17 2022" -A x64 -DTRIGGERLAB_BUILD_TESTS=OFF -DTRIGGERLAB_WARNINGS_AS_ERRORS=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Production configure failed' }
+          cmake --build build-production --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'Production build failed' }
+          $testBinaries = @(Get-ChildItem build-production/Release/*Tests.exe -ErrorAction SilentlyContinue)
+          if ($testBinaries.Count) { throw 'Production build contains test executables' }
+          foreach ($name in @('TriggerLab.exe','TriggerLabTrainer.exe')) {
+            $bytes = [IO.File]::ReadAllBytes((Join-Path 'build-production/Release' $name))
+            $strings = [Text.Encoding]::Unicode.GetString($bytes)
+            if ($strings.Contains('--smoke-test') -or $strings.Contains('--input-recovery-test')) {
+              throw "Test dispatcher was linked into $name"
+            }
+          }
       - name: Upload Windows executable
         uses: actions/upload-artifact@v7
         with:
           name: TriggerLab-windows-x64
           path: |
-            build/Release/TriggerLab.exe
-            build/Release/TriggerLabCapturePreview.exe
-            build/Release/TriggerLabTrainer.exe
+            build-production/Release/TriggerLab.exe
+            build-production/Release/TriggerLabTrainer.exe
           if-no-files-found: error
           retention-days: 14
       - name: Package portable preview
         shell: pwsh
-        run: ./scripts/package-windows.ps1 -BuildDir build
+        run: ./scripts/package-windows.ps1 -BuildDir build-production
       - name: Upload distribution archive
         uses: actions/upload-artifact@v7
         with:
@@ -88,6 +103,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  style:
+    name: C++ style
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check C++ formatting
+        run: python3 scripts/format.py
+
   portable-core:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -96,7 +122,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTRIGGERLAB_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -118,7 +144,7 @@ jobs:
       - name: Configure instrumented Debug build
         run: >-
           cmake -S . -B build-sanitizers -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_COMPILER=clang++ -DTRIGGERLAB_WARNINGS_AS_ERRORS=ON
           "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
           "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
       - name: Build
@@ -129,7 +155,7 @@ jobs:
   release:
     name: Publish versioned Windows release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [windows, portable-core, portable-sanitizers]
+    needs: [windows, portable-core, portable-sanitizers, style]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
