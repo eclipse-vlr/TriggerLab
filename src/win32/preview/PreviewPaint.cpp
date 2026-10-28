@@ -1,16 +1,5 @@
-#include "ImagePaletteDialog.hpp"
-#include "StartupDiagnostics.hpp"
 #include "preview/PreviewWindow.hpp"
-#include "triggerlab/ClickPermission.hpp"
-#include "triggerlab/ImageFile.hpp"
 #include <algorithm>
-#include <charconv>
-#include <cmath>
-#include <commctrl.h>
-#include <commdlg.h>
-#include <cwctype>
-#include <dwmapi.h>
-#include <uxtheme.h>
 
 namespace triggerlab::win32 {
 
@@ -52,14 +41,8 @@ void PreviewWindow::paint(HDC target, RECT rect) {
     const int w = rect.right, h = rect.bottom;
     if (w <= 0 || h <= 0)
         return;
-    if (!backBuffer || bufferWidth != w || bufferHeight != h) {
-        backBuffer = std::make_unique<PaintSurface>(target, w, h);
-        bufferWidth = w;
-        bufferHeight = h;
-    }
-    if (!backBuffer->valid())
-        return;
-    HDC dc = backBuffer->dc;
+    if (!backBuffer.ensure(target,w,h)) return;
+    HDC dc=backBuffer.dc();
     SetDCBrushColor(dc, p.background);
     FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     SetBkMode(dc, TRANSPARENT);

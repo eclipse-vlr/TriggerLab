@@ -1,11 +1,4 @@
 #include "trainer/TrainerWindow.hpp"
-#include "triggerlab/Version.hpp"
-#include <algorithm>
-#include <charconv>
-#include <cmath>
-#include <fstream>
-#include <iomanip>
-#include <sstream>
 
 namespace triggerlab::win32 {
 void TrainerWindow::resetSession() {

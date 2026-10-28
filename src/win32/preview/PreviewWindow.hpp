@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ClickPulse.hpp"
-#include "PaintSurface.hpp"
+#include "BackBuffer.hpp"
 #include "Theme.hpp"
 #include "WindowPickerDialog.hpp"
 #include "preview/ControlIds.hpp"
@@ -107,8 +107,7 @@ class PreviewWindow {
     double runBestCoverage = 0;
     std::wstring runLastIssue;
     ULONGLONG lastPaint = 0;
-    std::unique_ptr<PaintSurface> backBuffer;
-    int bufferWidth = 0, bufferHeight = 0;
+    BackBuffer backBuffer;
     HWND window = nullptr, targetWindow = nullptr, autoControl = nullptr;
     bool running = false, autoClick = false;
     DWORD targetProcess = 0;

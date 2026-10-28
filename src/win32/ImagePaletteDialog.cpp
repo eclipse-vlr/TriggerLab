@@ -1,4 +1,5 @@
 #include "ImagePaletteDialog.hpp"
+#include "BackBuffer.hpp"
 #include <array>
 #include <cmath>
 #include <commctrl.h>
@@ -18,7 +19,7 @@ struct Editor {
     UINT dpi = 96;
     HFONT font = nullptr, canvasFont = nullptr;
     bool dark = false, arranging = false;
-    int scrollY = 0, canvasHeight = 665, wheel = 0, bufferWidth = 0, bufferHeight = 0;
+    int scrollY = 0, canvasHeight = 665, wheel = 0;
     RECT instruction{}, regionText{}, hintText{}, swatches[5]{};
     std::array<RECT, 8> controls{};
     int scaled(int v) const {
@@ -30,9 +31,10 @@ struct Editor {
     int selected = 0;
     POINT start{}, end{};
     bool dragging = false, done = false, accepted = false;
-    HDC imageDc = nullptr, bufferDc = nullptr;
-    HBITMAP imageBitmap = nullptr, bufferBitmap = nullptr;
-    HGDIOBJ imagePrevious = nullptr, bufferPrevious = nullptr;
+    HDC imageDc = nullptr;
+    win32::BackBuffer backBuffer;
+    HBITMAP imageBitmap = nullptr;
+    HGDIOBJ imagePrevious = nullptr;
     explicit Editor(const Frame &value, bool darkTheme = false)
         : image(value), region{0, 0, value.width(), value.height()}, dark(darkTheme) {}
     void setDpi(UINT value) {
@@ -176,16 +178,10 @@ struct Editor {
             DeleteObject(canvasFont);
         if (imageDc && imagePrevious)
             SelectObject(imageDc, imagePrevious);
-        if (bufferDc && bufferPrevious)
-            SelectObject(bufferDc, bufferPrevious);
         if (imageBitmap)
             DeleteObject(imageBitmap);
-        if (bufferBitmap)
-            DeleteObject(bufferBitmap);
         if (imageDc)
             DeleteDC(imageDc);
-        if (bufferDc)
-            DeleteDC(bufferDc);
     }
     void refresh() {
         palette = imagePalette(image, region);
@@ -319,29 +315,9 @@ struct Editor {
         GetClientRect(window, &client);
         if (client.right <= 0 || client.bottom <= 0)
             return;
-        if (bufferDc && (bufferWidth != client.right || bufferHeight != client.bottom)) {
-            SelectObject(bufferDc, bufferPrevious);
-            DeleteObject(bufferBitmap);
-            DeleteDC(bufferDc);
-            bufferDc = nullptr;
-            bufferBitmap = nullptr;
-            bufferPrevious = nullptr;
-        }
-        if (!bufferDc) {
-            bufferDc = CreateCompatibleDC(dc);
-            bufferBitmap = bufferDc ? CreateCompatibleBitmap(dc, client.right, client.bottom) : nullptr;
-            if (!bufferBitmap)
-                throw std::runtime_error("Paint buffer unavailable");
-            bufferPrevious = SelectObject(bufferDc, bufferBitmap);
-            if (!bufferPrevious || bufferPrevious == HGDI_ERROR) {
-                bufferPrevious = nullptr;
-                throw std::runtime_error("Paint bitmap selection failed");
-            }
-        }
-        bufferWidth = client.right;
-        bufferHeight = client.bottom;
-        render(bufferDc);
-        BitBlt(dc, 0, 0, client.right, client.bottom, bufferDc, 0, 0, SRCCOPY);
+        if(!backBuffer.ensure(dc,client.right,client.bottom)) throw std::runtime_error("Paint buffer unavailable");
+        render(backBuffer.dc());
+        BitBlt(dc,0,0,client.right,client.bottom,backBuffer.dc(),0,0,SRCCOPY);
     }
 };
 LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {

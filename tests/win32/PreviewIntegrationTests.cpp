@@ -153,8 +153,8 @@ int PreviewTestHarness::rapidTargetTest(PreviewTestHarness &app) {
     recoveryDowns = 0;
     recoveryUps = 0;
     rejectRecoveryUp = false;
-    auto paint = [&](COLORREF color) {
-        state.color = color;
+    auto paint = [&](COLORREF fillColor) {
+        state.color = fillColor;
         InvalidateRect(target, nullptr, FALSE);
         UpdateWindow(target);
         GdiFlush();

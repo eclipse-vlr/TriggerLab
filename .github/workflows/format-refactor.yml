@@ -1,0 +1,26 @@
+name: Apply refactor formatting
+on:
+  push:
+    branches: [refactor/project-structure]
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Apply clang-format 18
+        run: python3 scripts/format.py --fix
+      - name: Save formatted source and remove temporary workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add include src tests
+          git rm .github/workflows/format-refactor.yml
+          git commit -m 'Применён единый стиль C++'
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin HEAD:refs/heads/refactor/project-structure

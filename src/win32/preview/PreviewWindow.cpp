@@ -1,16 +1,9 @@
 #include "preview/PreviewWindow.hpp"
-#include "ImagePaletteDialog.hpp"
 #include "StartupDiagnostics.hpp"
-#include "triggerlab/ClickPermission.hpp"
-#include "triggerlab/ImageFile.hpp"
 #include <algorithm>
-#include <charconv>
-#include <cmath>
 #include <commctrl.h>
-#include <commdlg.h>
-#include <cwctype>
 #include <dwmapi.h>
-#include <uxtheme.h>
+#include <stdexcept>
 
 namespace triggerlab::win32 {
 
