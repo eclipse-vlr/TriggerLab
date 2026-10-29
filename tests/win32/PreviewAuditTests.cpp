@@ -88,8 +88,9 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         sample.cursorPixel = pixel;
         sample.allBlack = unknown;
         app.analyzedClient = bounds;
-        app.analysisPoint = triggerlab::CapturePoint{sample.region.x + sample.region.width / 2,
-                                                     sample.region.y + sample.region.height / 2};
+        app.analysisPoint =
+            triggerlab::CapturePoint{static_cast<int>(sample.region.x + sample.region.width / 2),
+                                     static_cast<int>(sample.region.y + sample.region.height / 2)};
         app.acceptSample(std::move(sample), false);
     };
     for (bool center : {true, false}) {
@@ -225,6 +226,16 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
     if (!check(!corrupted.paramsOnDisk && !corrupted.settingsLoadWarning.empty() &&
                    corrupted.settings.dryRun && !corrupted.verified,
                "corrupt settings require explicit save and show recovery"))
+        return 2;
+    if (!corrupted.createWindow(GetModuleHandleW(nullptr)))
+        return 2;
+    corrupted.command(control::toggleTheme);
+    if (!check(!corrupted.settingsLoadWarning.empty() && !corrupted.inputAuthorized(),
+               "automatic UI preference save does not accept recovered settings"))
+        return 2;
+    corrupted.command(control::saveAll);
+    if (!check(corrupted.settingsLoadWarning.empty() && corrupted.paramsOnDisk,
+               "explicit save acknowledges recovered settings"))
         return 2;
     return 0;
 }

@@ -8,8 +8,10 @@
 namespace triggerlab::win32 {
 
 bool PreviewWindow::inputAuthorized() const {
-    return triggerlab::InputAuthorization{colorReady, verified, settingsDirty() || colorDirty()}.allows(
-        settings.dryRun);
+    return triggerlab::InputAuthorization{colorReady, verified,
+                                          !paramsOnDisk || !colorOnDisk || !settingsLoadWarning.empty() ||
+                                              settingsDirty() || colorDirty()}
+        .allows(settings.dryRun);
 }
 
 bool PreviewWindow::persistSettings(std::string &error) {
@@ -17,7 +19,6 @@ bool PreviewWindow::persistSettings(std::string &error) {
     if (ok) {
         savedSettings = settings;
         paramsOnDisk = true;
-        settingsLoadWarning.clear();
     }
     return ok;
 }
@@ -170,6 +171,8 @@ bool PreviewWindow::saveAll() {
     std::string error;
     const bool savedParams = persistSettings(error),
                savedRgb = !colorReady || triggerlab::saveColorProfile(colorPath, color, error);
+    if (savedParams)
+        settingsLoadWarning.clear();
     if (savedRgb && colorReady) {
         savedColor = color;
         colorOnDisk = true;
@@ -343,8 +346,11 @@ bool PreviewWindow::applySettings() {
     gate.setTiming(std::chrono::milliseconds{settings.dwellMs},
                    std::chrono::milliseconds{settings.cooldownMs});
     std::string error;
-    status = persistSettings(error) ? L"Параметры сохранены; триггер выключен"
-                                    : L"Параметры применены, но сохранение не удалось";
+    const bool saved = persistSettings(error);
+    if (saved)
+        settingsLoadWarning.clear();
+    status =
+        saved ? L"Параметры сохранены; триггер выключен" : L"Параметры применены, но сохранение не удалось";
     return true;
 }
 

@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--require-complete", action="store_true")
     args = parser.parse_args()
+    if not args.junit.is_file() or not args.log.is_file():
+        raise SystemExit("Native test results missing: build/test step did not complete")
     results = summarize(args.junit, args.log.read_text(encoding="utf-8", errors="replace"))
     print(json.dumps(results, indent=2))
     summary = "\n".join(["### Native test coverage", "",

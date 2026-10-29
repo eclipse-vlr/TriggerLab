@@ -84,7 +84,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     }
     case WM_GETMINMAXINFO: {
         auto *limits = reinterpret_cast<MINMAXINFO *>(lparam);
-        limits->ptMinTrackSize = {480, 320};
+        limits->ptMinTrackSize = {std::max(480, app ? app->scaled(300) : 480), 320};
         return 0;
     }
     case WM_COMMAND:
