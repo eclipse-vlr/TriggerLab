@@ -75,6 +75,52 @@ int main() {
         quality = compareColorSamples(&target, &background, match, qualitySettings);
         check(quality.valid && quality.targetFound && !quality.backgroundFound, "HSV samples supported");
     }
+    // Integer ratios must accept the exact boundary, independently of binary rounding.
+    struct Boundary {
+        int side, ignore, percent;
+    };
+    for (auto boundary : {Boundary{5, 0, 16}, Boundary{15, 2, 29}, Boundary{31, 3, 25}, Boundary{101, 0, 1},
+                          Boundary{101, 4, 100}}) {
+        AnalyzerSettings threshold;
+        threshold.side = boundary.side;
+        threshold.ignoreRadius = boundary.ignore;
+        threshold.minimumPercent = boundary.percent;
+        const int excluded = boundary.ignore ? (2 * boundary.ignore + 1) * (2 * boundary.ignore + 1) : 0;
+        const int eligible = boundary.side * boundary.side - excluded;
+        const int required = (boundary.percent * eligible + 99) / 100;
+        for (int count : {required - 1, required, required + 1}) {
+            if (count < 4 || count > eligible)
+                continue;
+            ColorMatchConfig match;
+            match.target = {19, 67, 231, 255};
+            match.channelTolerance = 0;
+            Frame scene(boundary.side, boundary.side);
+            scene.clear({40, 40, 40, 255});
+            const int center = boundary.side / 2, radius = boundary.ignore + 1;
+            int placed = 0;
+            auto add = [&](int x, int y) {
+                scene.at(x, y) = match.target;
+                ++placed;
+            };
+            if (boundary.ignore) {
+                add(center - radius, center);
+                add(center + radius, center);
+                add(center, center - radius);
+                add(center, center + radius);
+            } else
+                add(center, center);
+            for (int y = 0; y < boundary.side && placed < count; ++y)
+                for (int x = 0; x < boundary.side && placed < count; ++x)
+                    if (!(boundary.ignore && std::abs(x - center) <= boundary.ignore &&
+                          std::abs(y - center) <= boundary.ignore) &&
+                        scene.at(x, y).red != match.target.red)
+                        add(x, y);
+            const auto result = aimColorMask(scene, match, threshold);
+            check(result.matchingPixels == count &&
+                      result.found == (count * 100 >= boundary.percent * eligible),
+                  "below, exact and above integer coverage boundary");
+        }
+    }
     auto roi = aimRegion({-1920, 20, 1280, 720}, s);
     check(roi && roi->x == -1295 && roi->y == 365 && roi->width == 31,
           "client center, negative monitor origin");
@@ -161,6 +207,8 @@ int main() {
     auto dir = std::filesystem::temp_directory_path() /
                ("triggerlab-analyzer-" + std::to_string(Clock::now().time_since_epoch().count()));
     auto path = dir / "settings.json";
+    check(loadAnalyzerSettingsResult(path).status == AnalyzerSettingsStatus::Missing,
+          "missing settings are distinct from corruption");
     s.dwellMs = 123;
     s.cooldownMs = 456;
     s.clickMs = 60;
@@ -169,6 +217,8 @@ int main() {
     s.darkTheme = true;
     std::string error;
     check(saveAnalyzerSettings(path, s, error), "settings save");
+    check(loadAnalyzerSettingsResult(path).status == AnalyzerSettingsStatus::Loaded,
+          "successful settings load is explicit");
     auto saved = loadAnalyzerSettings(path);
     check(saved.dwellMs == 123 && saved.cooldownMs == 456 && saved.clickMs == 60 && saved.offsetX == -80 &&
               !saved.dryRun && saved.darkTheme,
@@ -206,6 +256,16 @@ int main() {
     }
     check(loadAnalyzerSettings(path).dryRun && loadAnalyzerSettings(path).dwellMs == 70,
           "corruption returns safe defaults");
+    check(loadAnalyzerSettingsResult(path).status == AnalyzerSettingsStatus::Invalid,
+          "corrupt settings report invalid instead of a saved default");
+    {
+        std::ofstream out(path);
+        out << std::string(8193, 'x');
+    }
+    check(loadAnalyzerSettingsResult(path).status == AnalyzerSettingsStatus::Invalid,
+          "oversized settings report invalid");
+    check(loadAnalyzerSettingsResult(dir).status == AnalyzerSettingsStatus::Unreadable,
+          "unreadable path is distinct from missing settings");
     std::filesystem::remove_all(dir);
     std::cout << "PASS: crosshair ROI, mask, timings, settings\n";
 }

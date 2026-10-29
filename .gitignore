@@ -24,3 +24,5 @@
 /analyzer-settings.json
 /analyzer-settings.json.tmp
 /profiles/
+__pycache__/
+*.py[cod]

@@ -4,31 +4,37 @@
 #include <fstream>
 
 namespace triggerlab {
-AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path &path) {
+AnalyzerSettingsLoadResult loadAnalyzerSettingsResult(const std::filesystem::path &path) {
     try {
         std::ifstream in(path, std::ios::binary);
-        if (!in)
-            return {};
+        if (!in) {
+            std::error_code error;
+            const bool exists = std::filesystem::exists(path, error);
+            return {{},
+                    !exists && !error ? AnalyzerSettingsStatus::Missing : AnalyzerSettingsStatus::Unreadable};
+        }
         std::string text(8193, '\0');
         in.read(text.data(), static_cast<std::streamsize>(text.size()));
-        if (in.bad() || in.gcount() > 8192)
-            return {};
+        if (in.bad())
+            return {{}, AnalyzerSettingsStatus::Unreadable};
+        if (in.gcount() > 8192)
+            return {{}, AnalyzerSettingsStatus::Invalid};
         text.resize(static_cast<std::size_t>(in.gcount()));
         auto object = persistence::parseNumericObject<int>(text);
         if (!object)
-            return {};
+            return {{}, AnalyzerSettingsStatus::Invalid};
         auto &values = *object;
         if (values.size() != 10 + static_cast<std::size_t>(values.contains("click_ms")) +
                                  static_cast<std::size_t>(values.contains("dark_theme")) +
                                  static_cast<std::size_t>(values.contains("advanced_mode")))
-            return {};
+            return {{}, AnalyzerSettingsStatus::Invalid};
         for (auto key : {"schema_version", "center", "dry_run", "side", "ignore_radius", "minimum_percent",
                          "offset_x", "offset_y", "dwell_ms", "cooldown_ms"})
             if (!values.contains(key))
-                return {};
+                return {{}, AnalyzerSettingsStatus::Invalid};
         if (values["schema_version"] != 1 || values["center"] < 0 || values["center"] > 1 ||
             values["dry_run"] < 0 || values["dry_run"] > 1)
-            return {};
+            return {{}, AnalyzerSettingsStatus::Invalid};
         AnalyzerSettings s{values["center"] == 1,   values["dry_run"] == 1,    values["side"],
                            values["ignore_radius"], values["minimum_percent"], values["offset_x"],
                            values["offset_y"],      values["dwell_ms"],        values["cooldown_ms"]};
@@ -36,20 +42,23 @@ AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path &path) {
             s.clickMs = values["click_ms"];
         if (values.contains("dark_theme")) {
             if (values["dark_theme"] < 0 || values["dark_theme"] > 1)
-                return {};
+                return {{}, AnalyzerSettingsStatus::Invalid};
             s.darkTheme = values["dark_theme"] == 1;
         }
         if (values.contains("advanced_mode")) {
             if (values["advanced_mode"] < 0 || values["advanced_mode"] > 1)
-                return {};
+                return {{}, AnalyzerSettingsStatus::Invalid};
             s.advancedMode = values["advanced_mode"] == 1;
         }
         if (!validAnalyzerSettings(s))
-            return {};
-        return s;
+            return {{}, AnalyzerSettingsStatus::Invalid};
+        return {s, AnalyzerSettingsStatus::Loaded};
     } catch (const std::exception &) {
-        return {};
+        return {{}, AnalyzerSettingsStatus::Unreadable};
     }
+}
+AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path &path) {
+    return loadAnalyzerSettingsResult(path).settings;
 }
 bool saveAnalyzerSettings(const std::filesystem::path &path, const AnalyzerSettings &s, std::string &error) {
     if (!validAnalyzerSettings(s)) {

@@ -18,15 +18,20 @@ void TrainerWindow::paint(HDC screen, const RECT &client) {
 
     SetDCBrushColor(dc, RGB(31, 38, 48));
     FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
-    RECT panel{960, 0, client.right, client.bottom};
+    const int savedDc = SaveDC(dc);
+    SetMapMode(dc, MM_ANISOTROPIC);
+    SetWindowExtEx(dc, 96, 96, nullptr);
+    SetViewportExtEx(dc, dpi_, dpi_, nullptr);
+    SetViewportOrgEx(dc, -scrollX_, -scrollY_, nullptr);
+    if (paintFont_)
+        SelectObject(dc, paintFont_);
+    RECT panel{kFrameWidth, 0, kTrainerWidth, kTrainerHeight};
     FillRect(dc, &panel, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(225, 230, 238));
     drawText(dc, 976, 18, tr(L"SETTINGS / SCENE") + L" · v" + std::wstring(triggerlab::wideVersion));
-    const int displayWidth = std::min(960L, client.right - client.left);
-    const int displayHeight = std::min(540L, client.bottom - client.top);
-    if (displayWidth <= 0 || displayHeight <= 0)
-        return;
+    const int displayWidth = kFrameWidth;
+    const int displayHeight = kFrameHeight;
     SetStretchBltMode(dc, COLORONCOLOR);
     StretchDIBits(dc, 0, 0, displayWidth, displayHeight, 0, 0, frame_.width(), frame_.height(), frame_.data(),
                   &bitmap, DIB_RGB_COLORS, SRCCOPY);
@@ -107,6 +112,7 @@ void TrainerWindow::paint(HDC screen, const RECT &client) {
     }
     SetTextColor(dc, RGB(180, 192, 202));
     drawText(dc, textX, displayHeight - 28, tr(L"Simulated shots only | Local scene | No external input"));
+    RestoreDC(dc, savedDc);
     BitBlt(screen, 0, 0, client.right - client.left, client.bottom - client.top, dc, 0, 0, SRCCOPY);
 }
 } // namespace triggerlab::win32

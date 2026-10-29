@@ -111,8 +111,7 @@ void PreviewWindow::cancelSelection() {
     pickDeadline = targetDeadline = aimPickDeadline = 0;
     snapshotPurpose = SnapshotPurpose::Color;
     KillTimer(window, timer::selection);
-    if (!autoClick && !syntheticDown)
-        UnregisterHotKey(window, hotkey::stop);
+    releaseStopHotkeyIfIdle();
     SetWindowTextW(GetDlgItem(window, control::pickCursorColor), L"Пипетка (3 сек.)");
     refreshTargetButton();
     SetWindowTextW(GetDlgItem(window, control::pickAimColor), L"Цвет из прицела (3 сек.)");
@@ -137,13 +136,13 @@ void PreviewWindow::beginAimSelection(SnapshotPurpose purpose) {
         status = notice = L"Выбранное окно недоступно для активации";
         return;
     }
-    if (!RegisterHotKey(window, hotkey::stop, MOD_NOREPEAT, VK_F9)) {
+    if (!ensureStopHotkey()) {
         status = L"F9 занят: снимок не начат";
         actionError = status + L". Освободите F9 в другом приложении и повторите действие.";
         return;
     }
     if (!SetTimer(window, timer::selection, 100, nullptr)) {
-        UnregisterHotKey(window, hotkey::stop);
+        releaseStopHotkeyIfIdle();
         status = L"Ошибка таймера: снимок не начат";
         return;
     }
@@ -188,6 +187,7 @@ void PreviewWindow::finishAimSelection() {
     }
     // Freeze a fresh image before the modal steals focus or timer messages arrive.
     running = false;
+    releaseStopHotkeyIfIdle();
     KillTimer(window, timer::capture);
     sample = {};
     mask = {};
@@ -365,13 +365,13 @@ void PreviewWindow::chooseTargetWindow() {
 void PreviewWindow::beginSelection(bool pick) {
     cancelSelection();
     disableClicks();
-    if (!RegisterHotKey(window, hotkey::stop, MOD_NOREPEAT, VK_F9)) {
+    if (!ensureStopHotkey()) {
         status = L"F9 занят: выбор не начат";
         actionError = status + L". Освободите F9 в другом приложении и повторите действие.";
         return;
     }
     if (!SetTimer(window, timer::selection, 100, nullptr)) {
-        UnregisterHotKey(window, hotkey::stop);
+        releaseStopHotkeyIfIdle();
         status = L"Ошибка таймера: выбор не начат";
         return;
     }
@@ -494,7 +494,7 @@ void PreviewWindow::update(bool pick) {
         }
     }
     if (running && !pick) {
-        if (sample.frame) {
+        if (sample.usableForInput()) {
             ++runFrames;
             if (mask.found)
                 ++runAlignedFrames;
@@ -518,7 +518,7 @@ void PreviewWindow::acceptSample(triggerlab::CaptureSample fresh, bool pick) {
         sample.cursorPosition &&
         GetAncestor(WindowFromPoint({sample.cursorPosition->x, sample.cursorPosition->y}), GA_ROOT) == window;
     if (ownPixel) {
-        if (autoClick && sample.frame)
+        if (autoClick && sample.usableForInput())
             gate.step(true, false, triggerlab::Clock::now());
         sample = {};
         status = L"Уведите курсор за окно анализатора";
@@ -530,11 +530,13 @@ void PreviewWindow::acceptSample(triggerlab::CaptureSample fresh, bool pick) {
         }
         mask = settings.center && !pick ? triggerlab::aimColorMask(*sample.frame, color, settings)
                                         : triggerlab::makeColorMask(*sample.frame, color);
-        if (sample.allBlack && settings.center)
+        if (sample.allBlack)
             mask.found = false;
-        const bool found = settings.center && !pick
-                               ? mask.found
-                               : (sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel, color));
+        const bool found =
+            sample.usableForInput() &&
+            (settings.center && !pick
+                 ? mask.found
+                 : (sample.cursorPixel && triggerlab::matchesColor(*sample.cursorPixel, color)));
         status = sample.allBlack ? L"Чёрный ROI: содержимое окна может быть недоступно"
                  : found ? L"СОВПАДЕНИЕ в области обнаружения"
                          : L"Нет совпадения";
@@ -552,7 +554,7 @@ void PreviewWindow::acceptSample(triggerlab::CaptureSample fresh, bool pick) {
                 : L"Захват недоступен (статус " + std::to_wstring(static_cast<int>(sample.status)) + L")";
     if (!settings.center || pick)
         analysisPoint = sample.cursorPosition;
-    if (autoClick && sample.frame && analysisPoint)
+    if (autoClick && sample.usableForInput() && analysisPoint)
         handleClick({analysisPoint->x, analysisPoint->y});
     else if (autoClick) {
         gate.step(false, false, triggerlab::Clock::now());

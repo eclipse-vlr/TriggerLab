@@ -226,6 +226,8 @@ PreviewWindow::Feedback PreviewWindow::feedback(bool foreground, bool held) cons
         return {FeedbackTone::Error, L"Ошибка параметров", validationMessage};
     if (!actionError.empty())
         return {FeedbackTone::Error, L"Действие не выполнено", actionError};
+    if (!settingsLoadWarning.empty())
+        return {FeedbackTone::Waiting, L"Стандартные параметры восстановлены", settingsLoadWarning};
     if (pickDeadline || targetDeadline || aimPickDeadline)
         return {FeedbackTone::Info, L"Выбор · F9 отменяет", nextHint()};
     if (wizardStep() == 0)

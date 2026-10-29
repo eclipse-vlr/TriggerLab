@@ -528,7 +528,7 @@ bool PreviewTestHarness::firstRunTest() {
         report << "FAIL: feedback states or presentation changed input\n";
         return false;
     }
-    if (RegisterHotKey(window, hotkey::stop, MOD_NOREPEAT, VK_F9)) {
+    if (ensureStopHotkey()) {
         autoClick = true;
         settings.dryRun = true;
         guidedAction();
@@ -541,8 +541,11 @@ bool PreviewTestHarness::firstRunTest() {
             report << "FAIL: repeating diagnostic loses its own F9 registration\n";
             return false;
         }
-    } else
-        report << "SKIP: F9 already owned; repeat-button subcheck omitted\n";
+    } else {
+        DestroyWindow(target);
+        report << "FAIL: F9 already owned; repeat-button subcheck did not run\n";
+        return false;
+    }
     SetWindowTextW(profileName, L"Моя первая тренировка");
     saveProfile();
     if (profiles.size() != 1 || profileChanged()) {

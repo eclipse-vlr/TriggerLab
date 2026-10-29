@@ -26,7 +26,7 @@ void PreviewWindow::guidedAction() {
             return;
     }
     const bool diagnostic = wizardStep() != 3;
-    disableClicks(); // Release our existing F9 registration before re-arming.
+    disableClicks();
     settings.dryRun = diagnostic;
     syncSettings();
     command(control::startCapture);
@@ -236,13 +236,17 @@ void PreviewWindow::command(int id, int notification) {
         id == control::backgroundReference)
         actionError.clear();
     if (id == control::startCapture) {
-        if (SetTimer(window, timer::capture, 10, nullptr)) {
+        if (!ensureStopHotkey()) {
+            status = L"F9 занят: захват не начат";
+            actionError = status + L". Освободите F9 в другом приложении и повторите запуск.";
+        } else if (SetTimer(window, timer::capture, 10, nullptr)) {
             runFrames = runAlignedFrames = runUnavailableFrames = 0;
             runBestCoverage = 0;
             runLastIssue.clear();
             running = true;
             status = L"Захват активен";
         } else {
+            releaseStopHotkeyIfIdle();
             status = L"Не удалось начать захват";
             actionError = L"Не удалось создать таймер захвата. Остановите анализатор и повторите запуск.";
         }
@@ -324,9 +328,11 @@ void PreviewWindow::command(int id, int notification) {
             return;
         cancelSelection();
         disableClicks();
-        settings.center = SendMessageW(modeControl, CB_GETCURSEL, 0, 0) == 0;
-        settings.dryRun = SendMessageW(dryControl, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        verified = false;
+        if (id == control::detectionMode) {
+            settings.center = SendMessageW(modeControl, CB_GETCURSEL, 0, 0) == 0;
+            verified = false;
+        } else
+            settings.dryRun = SendMessageW(dryControl, BM_GETCHECK, 0, 0) == BST_CHECKED;
         layoutMode();
         sample = {};
         mask = {};
@@ -347,7 +353,7 @@ void PreviewWindow::command(int id, int notification) {
         } else {
             autoClick = SendMessageW(autoControl, BM_GETCHECK, 0, 0) == BST_CHECKED;
             gate.reset();
-            if (autoClick && !RegisterHotKey(window, hotkey::stop, MOD_NOREPEAT, VK_F9)) {
+            if (autoClick && !ensureStopHotkey()) {
                 disableClicks();
                 status = L"F9 занят: автоклик не включён";
                 notice = status;
@@ -356,8 +362,7 @@ void PreviewWindow::command(int id, int notification) {
                 InvalidateRect(window, nullptr, FALSE);
                 return;
             }
-            if (!autoClick)
-                UnregisterHotKey(window, hotkey::stop);
+            releaseStopHotkeyIfIdle();
             status = autoClick ? (settings.dryRun ? L"Проверка активна: клики не отправляются"
                                                   : L"Клики включены только в выбранном окне")
                                : L"Триггер выключен";

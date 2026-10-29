@@ -30,7 +30,7 @@ void TrainerWindow::onFocusLost() noexcept {
 }
 
 void TrainerWindow::mouseMove(int x, int y) noexcept {
-    aim_.move(x, y);
+    aim_.move(MulDiv(x + scrollX_, 96, dpi_), MulDiv(y + scrollY_, 96, dpi_));
     TRACKMOUSEEVENT tracking{sizeof(TRACKMOUSEEVENT), TME_LEAVE, window_, 0};
     TrackMouseEvent(&tracking);
 }
@@ -122,7 +122,6 @@ void TrainerWindow::tick() {
     diagnostics_.observe({active(), lastDetection_.found}, lastResult_, now);
     if (lastResult_.fired)
         simulation_.onSimulatedShot(aim_.x(), aim_.y());
-    RECT scene{0, 0, kFrameWidth, kFrameHeight};
-    InvalidateRect(window_, &scene, FALSE);
+    InvalidateRect(window_, nullptr, FALSE);
 }
 } // namespace triggerlab::win32

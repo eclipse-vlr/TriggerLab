@@ -15,6 +15,11 @@ struct CaptureSample {
     std::optional<CapturePoint> cursorPosition;
     std::optional<Pixel> cursorPixel; // real cursor pixel; absent on failure or non-cursor capture
     bool allBlack = false;            // may be legitimate black pixels or protected content
+    // An entirely black capture cannot establish either a target or its departure.
+    // Black pixels remain supported when the surrounding capture contains visible detail.
+    bool usableForInput() const noexcept {
+        return status == CaptureStatus::Ok && frame.has_value() && !allBlack;
+    }
 };
 // Windows-only: reject any visible top-level overlap across the entire client ROI.
 bool isWindowRegionVisible(std::uintptr_t window, Region region) noexcept;
