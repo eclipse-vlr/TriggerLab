@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 
 namespace triggerlab::win32 {
@@ -191,10 +192,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         triggerlab::win32::TrainerTestHarness app(data.path);
         if (!app.createWindow(instance))
             return 1;
-        return app.startupFailureTest(instance) && app.layoutTest() &&
-                       app.smokeTest(data.path / L"settings.json") && app.paintResourcesStable()
-                   ? 0
-                   : 2;
+        if (!app.startupFailureTest(instance)) {
+            std::cerr << "FAIL: trainer startup error propagation\n";
+            return 2;
+        }
+        if (!app.layoutTest()) {
+            std::cerr << "FAIL: trainer scrolling, DPI or aim mapping\n";
+            return 2;
+        }
+        if (!app.smokeTest(data.path / L"settings.json")) {
+            std::cerr << "FAIL: trainer session and persistence\n";
+            return 2;
+        }
+        if (!app.paintResourcesStable()) {
+            std::cerr << "FAIL: trainer GDI ownership\n";
+            return 2;
+        }
+        return 0;
     } catch (const std::exception &) {
         return 1;
     }

@@ -46,6 +46,9 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
     }
     auto check = [&](bool value, const char *reason) {
         report << (value ? "PASS: " : "FAIL: ") << reason << '\n';
+        if (!value)
+            std::cerr << "FAIL: " << reason << " dry=" << app.settings.dryRun << " verified=" << app.verified
+                      << " armed=" << app.autoClick << " running=" << app.running << '\n';
         return value;
     };
     auto notify = [&](int id, int code, HWND control) {
@@ -79,7 +82,7 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         triggerlab::CaptureSample sample;
         sample.status = triggerlab::CaptureStatus::Ok;
         sample.region = roi.value_or(triggerlab::Region{cursor.x - 8, cursor.y - 8, 17, 17});
-        sample.frame.emplace(sample.region.width, sample.region.height);
+        sample.frame.emplace(static_cast<int>(sample.region.width), static_cast<int>(sample.region.height));
         const auto pixel = unknown   ? triggerlab::Pixel{0, 0, 0, 255}
                            : visible ? targetColor
                                      : triggerlab::Pixel{40, 40, 40, 255};
@@ -186,22 +189,22 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
             app.disableClicks();
             return app.verified;
         };
-        if (!verifyAgain())
+        if (!check(verifyAgain(), "repeat native diagnostic"))
             return 2;
         SetWindowTextW(app.settingEdits[7], L"30");
         if (!check(!app.verified && !app.autoClick, "changed parameter invalidates verification"))
             return 2;
-        if (!verifyAgain())
+        if (!check(verifyAgain(), "repeat native diagnostic"))
             return 2;
         SetWindowTextW(app.colorEdits[3], app.color.channelTolerance == 0 ? L"1" : L"0");
         if (!check(!app.verified && !app.autoClick, "changed color invalidates verification"))
             return 2;
-        if (!verifyAgain())
+        if (!check(verifyAgain(), "repeat native diagnostic"))
             return 2;
         app.applyWindowChoice({target, process, L"TriggerLab audit target", L"TriggerLab"});
         if (!check(!app.verified, "window choice invalidates verification"))
             return 2;
-        if (!verifyAgain())
+        if (!check(verifyAgain(), "repeat native diagnostic"))
             return 2;
         SendMessageW(app.modeControl, CB_SETCURSEL, center ? 1 : 0, 0);
         notify(control::detectionMode, CBN_SELCHANGE, app.modeControl);
