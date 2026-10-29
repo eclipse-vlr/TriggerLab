@@ -1,4 +1,5 @@
 #include "PreviewTestHarness.hpp"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 
@@ -9,17 +10,34 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
     GetModuleFileNameW(nullptr, executable, 32768);
     std::ofstream report(std::filesystem::path(executable).parent_path() / L"audit-test-report.txt");
     report << std::unitbuf;
+    int failureCode = 2;
     POINT cursor{};
     if (!GetCursorPos(&cursor) || inputHeld()) {
         report << "SKIP: interactive desktop or idle physical input unavailable\n";
         return 77;
     }
     const auto previous = GetForegroundWindow();
-    HWND target = CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"TriggerLab audit target", WS_POPUP | WS_VISIBLE,
-                                  cursor.x - 20, cursor.y - 20, 180, 180, nullptr, nullptr,
-                                  GetModuleHandleW(nullptr), nullptr);
+    MONITORINFO monitor{sizeof(monitor)};
+    constexpr int targetSide = 180;
+    if (!GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor) ||
+        monitor.rcMonitor.right - monitor.rcMonitor.left < targetSide ||
+        monitor.rcMonitor.bottom - monitor.rcMonitor.top < targetSide)
+        return 77;
+    const int x = std::clamp(cursor.x - 20, monitor.rcMonitor.left, monitor.rcMonitor.right - targetSide);
+    const int y = std::clamp(cursor.y - 20, monitor.rcMonitor.top, monitor.rcMonitor.bottom - targetSide);
+    // STATIC without SS_NOTIFY returns HTTRANSPARENT. The production input
+    // guard must see this owned target, not the window behind its text control.
+    WNDCLASSW targetClass{};
+    targetClass.hInstance = GetModuleHandleW(nullptr);
+    targetClass.lpfnWndProc = DefWindowProcW;
+    targetClass.lpszClassName = L"TriggerLabAuditTarget";
+    if (!RegisterClassW(&targetClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        return failureCode;
+    HWND target = CreateWindowExW(WS_EX_TOPMOST, targetClass.lpszClassName, L"TriggerLab audit target",
+                                  WS_POPUP | WS_VISIBLE, x, y, targetSide, targetSide, nullptr, nullptr,
+                                  targetClass.hInstance, nullptr);
     if (!target)
-        return 2;
+        return failureCode;
     struct Cleanup {
         PreviewTestHarness &app;
         HWND target, previous;
@@ -45,12 +63,37 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         return 77;
     }
     auto check = [&](bool value, const char *reason) {
+        POINT current{};
+        if (!GetCursorPos(&current) || current.x != cursor.x || current.y != cursor.y || inputHeld()) {
+            report << "SKIP: physical input changed during " << reason << '\n';
+            failureCode = 77;
+            return false;
+        }
         report << (value ? "PASS: " : "FAIL: ") << reason << '\n';
-        if (!value)
+        if (!value) {
             std::cerr << "FAIL: " << reason << " dry=" << app.settings.dryRun << " verified=" << app.verified
-                      << " armed=" << app.autoClick << " running=" << app.running << '\n';
+                      << " armed=" << app.autoClick << " running=" << app.running
+                      << " downs=" << recoveryDowns << " ups=" << recoveryUps
+                      << " pending=" << app.syntheticDown << " fresh=" << app.sample.usableForInput()
+                      << " found=" << app.mask.found << " latched=" << app.gate.clickedHover()
+                      << " dwell=" << app.gate.elapsed(triggerlab::Clock::now()).count()
+                      << " foreground=" << (GetForegroundWindow() == target) << " held=" << inputHeld()
+                      << " roi=" << app.permittedRegion(app.sample.region) << " cursor=" << cursor.x << ','
+                      << cursor.y << '\n';
+            const int bytes =
+                WideCharToMultiByte(CP_UTF8, 0, app.clickStatus.data(),
+                                    static_cast<int>(app.clickStatus.size()), nullptr, 0, nullptr, nullptr);
+            std::string detail(bytes, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, app.clickStatus.data(), static_cast<int>(app.clickStatus.size()),
+                                detail.data(), bytes, nullptr, nullptr);
+            report << detail << '\n';
+            std::cerr << detail << '\n';
+        }
         return value;
     };
+    if (!check(GetAncestor(WindowFromPoint(cursor), GA_ROOT) == target,
+               "test target receives cursor hit testing"))
+        return failureCode;
     auto notify = [&](int id, int code, HWND control) {
         SendMessageW(app.window, WM_COMMAND, MAKEWPARAM(id, code), reinterpret_cast<LPARAM>(control));
     };
@@ -71,7 +114,7 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
     DWORD process = 0;
     GetWindowThreadProcessId(target, &process);
     if (!app.applyWindowChoice({target, process, L"TriggerLab audit target", L"TriggerLab"}))
-        return 2;
+        return failureCode;
     if (!app.settings.advancedMode)
         app.command(control::toggleAdvanced);
     const auto targetColor = triggerlab::Pixel{19, 67, 231, 255};
@@ -111,15 +154,15 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         SetWindowTextW(app.settingEdits[7], L"150");
         notify(control::saveAll, BN_CLICKED, GetDlgItem(app.window, control::saveAll));
         if (!check(!app.settingsDirty() && !app.colorDirty() && !app.verified, "saved unverified draft"))
-            return 2;
+            return failureCode;
         app.command(control::startCapture);
         KillTimer(app.window, timer::capture); // Deterministic injected frames; same production adapter.
         if (!check(app.running && app.stopHotkeyRegistered && !app.autoClick,
                    "capture owns F9 before arming"))
-            return 2;
+            return failureCode;
         SetForegroundWindow(target);
         if (!check(keyF9(), "real F9 stops capture while another window has focus"))
-            return 2;
+            return failureCode;
         app.command(control::startCapture);
         KillTimer(app.window, timer::capture);
         if (!app.settings.dryRun)
@@ -131,23 +174,23 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         observe(true);
         if (!check(app.verified && app.diagnosticCount > 0 && app.settings.dryRun,
                    "native UI diagnostic verifies"))
-            return 2;
+            return failureCode;
         recoveryDowns = recoveryUps = 0;
         rejectRecoveryUp = false;
         SendMessageW(app.dryControl, BM_CLICK, 0, 0);
         if (!check(app.verified && !app.autoClick && !app.settings.dryRun,
                    "native dryRun toggle preserves verification and disarms"))
-            return 2;
+            return failureCode;
         SendMessageW(app.autoControl, BM_CLICK, 0, 0);
         SetForegroundWindow(target);
         observe(true);
         Sleep(2);
         observe(true);
         if (!check(recoveryDowns == 1 && app.syntheticDown, "first authorized Down"))
-            return 2;
+            return failureCode;
         observe(false, true);
         if (!check(app.gate.clickedHover(), "unknown black frame during Down preserves latch"))
-            return 2;
+            return failureCode;
         Sleep(180);
         app.finishClick();
         observe(true);
@@ -159,20 +202,20 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
         observe(true);
         if (!check(recoveryDowns == 1 && recoveryUps == 1 && app.gate.clickedHover(),
                    "unknown black frame after Up does not authorize repeated Down"))
-            return 2;
+            return failureCode;
         observe(false);
         observe(true);
         Sleep(2);
         observe(true);
         if (!check(recoveryDowns == 2, "confirmed departure permits next hover"))
-            return 2;
+            return failureCode;
         app.disableClicks();
         if (!check(app.running && app.stopHotkeyRegistered && !app.syntheticDown,
                    "disarming retains capture F9 and releases Down"))
-            return 2;
+            return failureCode;
         SetForegroundWindow(target);
         if (!check(keyF9(), "F9 still stops capture after disarming"))
-            return 2;
+            return failureCode;
 
         // A changed detection mode, color, parameter or chosen window invalidates the result.
         auto verifyAgain = [&] {
@@ -190,35 +233,35 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
             return app.verified;
         };
         if (!check(verifyAgain(), "repeat native diagnostic"))
-            return 2;
+            return failureCode;
         SetWindowTextW(app.settingEdits[7], L"30");
         if (!check(!app.verified && !app.autoClick, "changed parameter invalidates verification"))
-            return 2;
+            return failureCode;
         if (!check(verifyAgain(), "repeat native diagnostic"))
-            return 2;
+            return failureCode;
         SetWindowTextW(app.colorEdits[3], app.color.channelTolerance == 0 ? L"1" : L"0");
         if (!check(!app.verified && !app.autoClick, "changed color invalidates verification"))
-            return 2;
+            return failureCode;
         if (!check(verifyAgain(), "repeat native diagnostic"))
-            return 2;
+            return failureCode;
         app.applyWindowChoice({target, process, L"TriggerLab audit target", L"TriggerLab"});
         if (!check(!app.verified, "window choice invalidates verification"))
-            return 2;
+            return failureCode;
         if (!check(verifyAgain(), "repeat native diagnostic"))
-            return 2;
+            return failureCode;
         SendMessageW(app.modeControl, CB_SETCURSEL, center ? 1 : 0, 0);
         notify(control::detectionMode, CBN_SELCHANGE, app.modeControl);
         if (!check(!app.verified && !app.autoClick, "changed detection mode invalidates verification"))
-            return 2;
+            return failureCode;
     }
     app.stop();
     if (!RegisterHotKey(nullptr, 55, MOD_NOREPEAT, VK_F9))
-        return 2;
+        return failureCode;
     app.command(control::startCapture);
     const bool conflictRejected = !app.running && !app.actionError.empty();
     UnregisterHotKey(nullptr, 55);
     if (!check(conflictRejected, "F9 conflict prevents capture with a visible error"))
-        return 2;
+        return failureCode;
     const auto corruptRoot = app.settingsPath.parent_path() / L"corrupt";
     std::filesystem::create_directories(corruptRoot);
     {
@@ -229,17 +272,17 @@ int PreviewTestHarness::auditTransitionsTest(PreviewTestHarness &app) {
     if (!check(!corrupted.paramsOnDisk && !corrupted.settingsLoadWarning.empty() &&
                    corrupted.settings.dryRun && !corrupted.verified,
                "corrupt settings require explicit save and show recovery"))
-        return 2;
+        return failureCode;
     if (!corrupted.createWindow(GetModuleHandleW(nullptr)))
-        return 2;
+        return failureCode;
     corrupted.command(control::toggleTheme);
     if (!check(!corrupted.settingsLoadWarning.empty() && !corrupted.inputAuthorized(),
                "automatic UI preference save does not accept recovered settings"))
-        return 2;
+        return failureCode;
     corrupted.command(control::saveAll);
     if (!check(corrupted.settingsLoadWarning.empty() && corrupted.paramsOnDisk,
                "explicit save acknowledges recovered settings"))
-        return 2;
+        return failureCode;
     return 0;
 }
 } // namespace triggerlab::win32
