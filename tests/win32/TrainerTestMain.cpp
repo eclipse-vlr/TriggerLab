@@ -8,9 +8,67 @@
 #include <sstream>
 
 namespace triggerlab::win32 {
+namespace {
+DWORD startupError = 0;
+std::wstring startupPhase;
+HWND WINAPI rejectTrainerWindow(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE,
+                                LPVOID) {
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return nullptr;
+}
+void recordStartupError(const wchar_t *phase, DWORD code) {
+    startupPhase = phase;
+    startupError = code;
+}
+} // namespace
 
 struct TrainerTestHarness : TrainerWindow {
     using TrainerWindow::TrainerWindow;
+    bool startupFailureTest(HINSTANCE instance) {
+        TrainerTestHarness failed(configPath_.parent_path());
+        return !failed.TrainerWindow::createWindow(instance, rejectTrainerWindow, recordStartupError) &&
+               !failed.window_ && startupError == ERROR_NOT_ENOUGH_MEMORY &&
+               startupPhase == L"Create trainer window";
+    }
+    bool layoutTest() {
+        RECT original{};
+        GetWindowRect(window_, &original);
+        const UINT actualDpi = dpi_;
+        for (UINT testDpi : {96u, 120u, 144u, 192u}) {
+            setDpi(testDpi);
+            SetWindowPos(window_, nullptr, 0, 0, 1000, 680, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            arrange();
+            for (const auto &entry : controlRects_) {
+                reveal(entry.control);
+                RECT rect{}, client{};
+                GetWindowRect(entry.control, &rect);
+                MapWindowPoints(nullptr, window_, reinterpret_cast<POINT *>(&rect), 2);
+                GetClientRect(window_, &client);
+                if (rect.left < 0 || rect.top < 0 || rect.right > client.right || rect.bottom > client.bottom)
+                    return false;
+            }
+            scroll(SB_HORZ, SB_TOP);
+            scroll(SB_VERT, SB_TOP);
+            mouseMove(scaled(480), scaled(270));
+            if (aim_.x() != 480 || aim_.y() != 270)
+                return false;
+            scroll(SB_HORZ, SB_BOTTOM);
+            scroll(SB_VERT, SB_BOTTOM);
+            const int x = scaled(480) - scrollX_, y = scaled(270) - scrollY_;
+            mouseMove(x, y);
+            if (aim_.x() != 480 || aim_.y() != 270)
+                return false;
+            LOGFONTW font{};
+            if (!GetObjectW(controlFont_, sizeof(font), &font) || font.lfHeight != -scaled(16))
+                return false;
+        }
+        setDpi(actualDpi);
+        SetWindowPos(window_, nullptr, 0, 0, original.right - original.left, original.bottom - original.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        scroll(SB_HORZ, SB_TOP);
+        scroll(SB_VERT, SB_TOP);
+        return true;
+    }
     bool smokeTest(const std::filesystem::path &path) {
         configPath_ = path;
         engine_.setConfig({});
@@ -120,6 +178,7 @@ struct TrainerTestHarness : TrainerWindow {
 } // namespace triggerlab::win32
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     struct TestDirectory {
         std::filesystem::path path = std::filesystem::temp_directory_path() /
                                      (L"triggerlab-trainer-test-" + std::to_wstring(GetCurrentProcessId()));
@@ -132,7 +191,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         triggerlab::win32::TrainerTestHarness app(data.path);
         if (!app.createWindow(instance))
             return 1;
-        return app.smokeTest(data.path / L"settings.json") && app.paintResourcesStable() ? 0 : 2;
+        return app.startupFailureTest(instance) && app.layoutTest() &&
+                       app.smokeTest(data.path / L"settings.json") && app.paintResourcesStable()
+                   ? 0
+                   : 2;
     } catch (const std::exception &) {
         return 1;
     }

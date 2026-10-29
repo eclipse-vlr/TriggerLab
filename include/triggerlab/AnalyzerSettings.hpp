@@ -10,6 +10,12 @@ struct AnalyzerSettings {
     bool darkTheme = false, advancedMode = false;
 };
 bool validAnalyzerSettings(const AnalyzerSettings &) noexcept;
+enum class AnalyzerSettingsStatus { Loaded, Missing, Invalid, Unreadable };
+struct AnalyzerSettingsLoadResult {
+    AnalyzerSettings settings;
+    AnalyzerSettingsStatus status = AnalyzerSettingsStatus::Missing;
+};
+AnalyzerSettingsLoadResult loadAnalyzerSettingsResult(const std::filesystem::path &);
 AnalyzerSettings loadAnalyzerSettings(const std::filesystem::path &);
 bool saveAnalyzerSettings(const std::filesystem::path &, const AnalyzerSettings &, std::string &error);
 std::optional<Region> aimRegion(Region client, const AnalyzerSettings &) noexcept;

@@ -40,15 +40,19 @@ PreviewWindow::PreviewWindow(const std::filesystem::path &dataDirectory,
         colorReady = true;
     }
     settingsPath = colorPath.parent_path() / L"analyzer-settings.json";
-    settings = triggerlab::loadAnalyzerSettings(settingsPath);
+    const auto parameters = triggerlab::loadAnalyzerSettingsResult(settingsPath);
+    settings = parameters.settings;
     settings.dryRun = true; // Every launch starts in diagnostic mode.
     savedSettings = settings;
     savedColor = color;
-    std::error_code settingsError;
-    paramsOnDisk = std::filesystem::exists(settingsPath, settingsError);
+    paramsOnDisk = parameters.status == triggerlab::AnalyzerSettingsStatus::Loaded;
     colorOnDisk = loaded.ok;
-    if (settingsError)
-        throw std::runtime_error("Cannot access settings directory");
+    if (parameters.status == triggerlab::AnalyzerSettingsStatus::Invalid ||
+        parameters.status == triggerlab::AnalyzerSettingsStatus::Unreadable) {
+        settingsLoadWarning = L"Настройки не удалось прочитать. Восстановлены стандартные параметры; "
+                              L"проверьте их и нажмите «Сохранить всё».";
+        notice = settingsLoadWarning;
+    }
     gate.setTiming(std::chrono::milliseconds{settings.dwellMs},
                    std::chrono::milliseconds{settings.cooldownMs});
 }
@@ -161,7 +165,7 @@ LRESULT CALLBACK PreviewWindow::windowProcedure(HWND window, UINT message, WPARA
                 app->stop();
             return 0;
         case WM_KEYDOWN:
-            if (wp == VK_ESCAPE)
+            if (wp == VK_ESCAPE || wp == VK_F9)
                 app->stop();
             else if (wp == 'C')
                 app->update(true);
@@ -315,7 +319,7 @@ int PreviewWindow::messageLoop() {
     MSG message{};
     BOOL result;
     while ((result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-        if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE) {
+        if (message.message == WM_KEYDOWN && (message.wParam == VK_ESCAPE || message.wParam == VK_F9)) {
             stop();
             continue;
         }

@@ -48,7 +48,7 @@ echo [2/3] Building Release...
 cmake --build build --config Release --parallel
 if errorlevel 1 exit /b 1
 echo [3/3] Running tests...
-ctest --test-dir build -C Release --output-on-failure
+ctest --test-dir build -C Release --output-on-failure --no-tests=error --output-junit "%CD%\build\Testing\windows-tests.xml"
 if errorlevel 1 exit /b 1
 if not exist "build\Release\TriggerLab.exe" (
     echo ERROR: The build did not produce TriggerLab.exe.

@@ -24,15 +24,27 @@ void PreviewWindow::finishClick(bool count) {
         notice = clickStatus =
             L"Отпускание отклонено системой; новые клики заблокированы, Stop/F9 повторяет отпускание";
     }
-    if (!syntheticDown && !autoClick && !pickDeadline && !targetDeadline && !aimPickDeadline)
+    releaseStopHotkeyIfIdle();
+}
+
+bool PreviewWindow::ensureStopHotkey() {
+    if (!stopHotkeyRegistered)
+        stopHotkeyRegistered = RegisterHotKey(window, hotkey::stop, MOD_NOREPEAT, VK_F9) != FALSE;
+    return stopHotkeyRegistered;
+}
+
+void PreviewWindow::releaseStopHotkeyIfIdle() {
+    if (stopHotkeyRegistered && !running && !autoClick && !syntheticDown && !pickDeadline &&
+        !targetDeadline && !aimPickDeadline) {
         UnregisterHotKey(window, hotkey::stop);
+        stopHotkeyRegistered = false;
+    }
 }
 
 void PreviewWindow::disableClicks() {
     finishClick(false);
-    if (!syntheticDown)
-        UnregisterHotKey(window, hotkey::stop);
     autoClick = false;
+    releaseStopHotkeyIfIdle();
     gate.reset();
     clickStatus = syntheticDown ? L"Отпускание не подтверждено; новые клики заблокированы" : L"Выключен";
     if (autoControl)
@@ -84,8 +96,13 @@ void PreviewWindow::handleClick(POINT capturedCursor) {
     if (!permittedAt(capturedCursor)) {
         // A focus change is not evidence that the cursor left the color.
         const bool outside = GetAncestor(WindowFromPoint(capturedCursor), GA_ROOT) != targetWindow;
-        gate.step(sample.frame.has_value() && outside, false, triggerlab::Clock::now());
+        gate.step(sample.usableForInput() && outside, false, triggerlab::Clock::now());
         clickStatus = outside ? L"Курсор вне выбранного окна" : L"Выбранное окно не активно: активируйте его";
+        return;
+    }
+    if (!sample.usableForInput()) {
+        gate.step(false, false, triggerlab::Clock::now());
+        clickStatus = L"Нет достоверного кадра: " + status;
         return;
     }
     const bool match = settings.center
@@ -95,11 +112,11 @@ void PreviewWindow::handleClick(POINT capturedCursor) {
     if (syntheticDown) {
         // Observe a short target departure even while our own Down is held.
         // Only the pulse owner may release it; never submit another Down here.
-        gate.step(sample.frame.has_value(), match, now);
+        gate.step(sample.usableForInput(), match, now);
         clickStatus = L"Нажатие выполняется";
         return;
     }
-    if (!gate.step(sample.frame.has_value(), match, now)) {
+    if (!gate.step(sample.usableForInput(), match, now)) {
         clickStatus = !match ? L"Ожидаю цвет в области обнаружения"
                       : gate.clickedHover()
                           ? L"Срабатывание выполнено: нужен уход с цвета"

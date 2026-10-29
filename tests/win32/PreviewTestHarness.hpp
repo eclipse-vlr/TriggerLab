@@ -17,6 +17,7 @@ struct PreviewTestHarness : PreviewWindow {
         return window;
     }
     bool inputRecoveryTest();
+    static int auditTransitionsTest(PreviewTestHarness &app);
     bool windowPickerTest();
     bool scrollPaintTest(std::ostream &report);
     bool helpTooltipsTest(std::ostream &report);

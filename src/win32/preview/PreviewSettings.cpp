@@ -17,6 +17,7 @@ bool PreviewWindow::persistSettings(std::string &error) {
     if (ok) {
         savedSettings = settings;
         paramsOnDisk = true;
+        settingsLoadWarning.clear();
     }
     return ok;
 }

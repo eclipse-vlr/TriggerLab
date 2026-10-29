@@ -19,13 +19,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     try {
         const std::wstring option(commandLine);
-        const bool inert = option == L"--input-recovery-test" || option == L"--target-sequence-test";
+        const bool inert = option == L"--input-recovery-test" || option == L"--target-sequence-test" ||
+                           option == L"--audit-transitions-test";
         TestDirectory data;
         PreviewTestHarness app(data.path, inert ? recoverySender : SendInput);
         if (!app.createWindow(instance))
             return 1;
         if (option == L"--input-recovery-test")
             return app.inputRecoveryTest() ? 0 : 2;
+        if (option == L"--audit-transitions-test")
+            return PreviewTestHarness::auditTransitionsTest(app);
         if (option == L"--target-sequence-test")
             return PreviewTestHarness::rapidTargetTest(app);
         if (option == L"--help-popup-test")

@@ -1,4 +1,6 @@
 #include "trainer/TrainerWindow.hpp"
+#include "StartupDiagnostics.hpp"
+#include <algorithm>
 #include <charconv>
 
 namespace triggerlab::win32 {
@@ -82,9 +84,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     }
     case WM_GETMINMAXINFO: {
         auto *limits = reinterpret_cast<MINMAXINFO *>(lparam);
-        RECT minimum{0, 0, kFrameWidth + 280, 710};
-        AdjustWindowRect(&minimum, WS_OVERLAPPEDWINDOW, FALSE);
-        limits->ptMinTrackSize = {minimum.right - minimum.left, minimum.bottom - minimum.top};
+        limits->ptMinTrackSize = {480, 320};
         return 0;
     }
     case WM_COMMAND:
@@ -98,6 +98,37 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
             MessageBoxW(window, app->tr(L"Could not start UI timer.").c_str(), L"TriggerLab",
                         MB_OK | MB_ICONERROR);
             return -1;
+        }
+        return 0;
+    case WM_SIZE:
+        if (app)
+            app->arrange();
+        return 0;
+    case WM_DPICHANGED:
+        if (app) {
+            app->setDpi(HIWORD(wparam));
+            const auto *rect = reinterpret_cast<const RECT *>(lparam);
+            SetWindowPos(window, nullptr, rect->left, rect->top, rect->right - rect->left,
+                         rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
+            app->arrange();
+        }
+        return 0;
+    case WM_HSCROLL:
+    case WM_VSCROLL:
+        if (app)
+            app->scroll(message == WM_HSCROLL ? SB_HORZ : SB_VERT, LOWORD(wparam));
+        return 0;
+    case WM_MOUSEWHEEL:
+        if (app) {
+            app->wheelRemainder_ += GET_WHEEL_DELTA_WPARAM(wparam);
+            const int steps = app->wheelRemainder_ / WHEEL_DELTA;
+            app->wheelRemainder_ %= WHEEL_DELTA;
+            if (wparam & MK_SHIFT)
+                app->scrollX_ -= steps * app->scaled(90);
+            else
+                app->scrollY_ -= steps * app->scaled(90);
+            app->onFocusLost();
+            app->arrange();
         }
         return 0;
     case WM_TIMER:
@@ -160,6 +191,11 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         KillTimer(window, kTimerId);
         PostQuitMessage(0);
         return 0;
+    case WM_NCDESTROY:
+        if (app)
+            app->attach(nullptr);
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        break;
     }
     return DefWindowProcW(window, message, wparam, lparam);
 }
@@ -167,8 +203,15 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
 TrainerWindow::~TrainerWindow() {
     if (window_ && IsWindow(window_))
         DestroyWindow(window_);
+    if (controlFont_)
+        DeleteObject(controlFont_);
+    if (paintFont_)
+        DeleteObject(paintFont_);
 }
 bool TrainerWindow::createWindow(HINSTANCE instance) {
+    return createWindow(instance, CreateWindowExW, triggerlab::reportStartupError);
+}
+bool TrainerWindow::createWindow(HINSTANCE instance, WindowCreator creator, ErrorReporter report) {
     constexpr const wchar_t *className = L"TriggerLabSandboxClass";
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -177,27 +220,33 @@ bool TrainerWindow::createWindow(HINSTANCE instance) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.lpszClassName = className;
-    if (RegisterClassExW(&wc) == 0) {
-        MessageBoxW(nullptr, tr(L"Could not register window class.").c_str(), L"TriggerLab",
-                    MB_OK | MB_ICONERROR);
+    if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        report(L"Register trainer window class", GetLastError());
         return false;
     }
 
-    RECT rect{0, 0, kFrameWidth + 280, 710};
+    RECT rect{0, 0, kTrainerWidth, kTrainerHeight};
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE);
-    HWND window =
-        CreateWindowExW(0, className, L"TriggerLab - Local Practice Sandbox",
-                        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
-                        rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, instance, this);
+    HWND window = creator(0, className, L"TriggerLab - Local Practice Sandbox",
+                          WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+                          rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, instance, this);
     if (!window) {
-        MessageBoxW(nullptr, tr(L"Could not create practice window.").c_str(), L"TriggerLab",
-                    MB_OK | MB_ICONERROR);
-        return 1;
+        report(L"Create trainer window", GetLastError());
+        return false;
     }
 
     return true;
 }
 void TrainerWindow::show(int command) {
+    MONITORINFO monitor{sizeof(monitor)};
+    if (GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        const auto work = monitor.rcWork;
+        const int width = std::min(scaled(kTrainerWidth + 20), static_cast<int>(work.right - work.left));
+        const int height = std::min(scaled(kTrainerHeight + 40), static_cast<int>(work.bottom - work.top));
+        SetWindowPos(window_, nullptr, work.left + (work.right - work.left - width) / 2,
+                     work.top + (work.bottom - work.top - height) / 2, width, height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     ShowWindow(window_, command);
     UpdateWindow(window_);
 }
@@ -205,8 +254,10 @@ int TrainerWindow::messageLoop() {
     MSG message{};
     BOOL status = 0;
     while ((status = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-        if (GetFocus() != window_ && IsDialogMessageW(window_, &message))
+        if (GetFocus() != window_ && IsDialogMessageW(window_, &message)) {
+            reveal(GetFocus());
             continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }

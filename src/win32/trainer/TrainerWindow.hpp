@@ -9,12 +9,15 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <windows.h>
 #include <windowsx.h>
 
 namespace triggerlab::win32 {
 inline constexpr int kFrameWidth = 960;
 inline constexpr int kFrameHeight = 540;
+inline constexpr int kTrainerWidth = kFrameWidth + 280;
+inline constexpr int kTrainerHeight = 710;
 inline constexpr UINT_PTR kTimerId = 1;
 inline constexpr UINT kTimerIntervalMs = 16;
 const wchar_t *stateLabel(triggerlab::TriggerState state) noexcept;
@@ -62,6 +65,24 @@ class TrainerWindow {
 
   private:
     friend struct TrainerTestHarness;
+    friend LRESULT CALLBACK windowProcedure(HWND, UINT, WPARAM, LPARAM);
+    using WindowCreator = decltype(&CreateWindowExW);
+    using ErrorReporter = void (*)(const wchar_t *, DWORD);
+    bool createWindow(HINSTANCE instance, WindowCreator creator, ErrorReporter report);
+    void setDpi(UINT value);
+    int scaled(int value) const;
+    void arrange();
+    void scroll(int bar, int request);
+    void reveal(HWND control);
+    struct ControlRect {
+        HWND control;
+        RECT logical;
+    };
+    std::vector<ControlRect> controlRects_;
+    UINT dpi_ = 96;
+    int scrollX_ = 0, scrollY_ = 0, wheelRemainder_ = 0;
+    bool arranging_ = false;
+    HFONT controlFont_ = nullptr, paintFont_ = nullptr;
     BackBuffer backBuffer_;
     triggerlab::AimInput aim_;
     std::filesystem::path configPath_;

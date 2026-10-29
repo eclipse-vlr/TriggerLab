@@ -43,6 +43,27 @@ void TrainerWindow::createControls() {
                       100, window_, reinterpret_cast<HMENU>(208), nullptr, nullptr);
     SendMessageW(languageControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
     SendMessageW(languageControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Русский"));
+    EnumChildWindows(
+        window_,
+        [](HWND child, LPARAM context) -> BOOL {
+            auto &app = *reinterpret_cast<TrainerWindow *>(context);
+            if (GetParent(child) != app.window_)
+                return TRUE;
+            RECT rect{};
+            GetWindowRect(child, &rect);
+            MapWindowPoints(nullptr, app.window_, reinterpret_cast<POINT *>(&rect), 2);
+            if (child == app.sceneControl_)
+                rect.bottom = rect.top + 180;
+            if (child == app.languageControl_)
+                rect.bottom = rect.top + 100;
+            app.controlRects_.push_back({child, rect});
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(this));
+    paintFont_ =
+        CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    setDpi(GetDpiForWindow(window_));
     syncControls();
     updateLanguage();
 }

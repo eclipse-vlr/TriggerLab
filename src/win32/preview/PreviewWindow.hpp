@@ -88,7 +88,7 @@ class PreviewWindow {
     std::vector<triggerlab::NamedProfile> profiles;
     std::wstring selectedProfile;
     std::wstring validationMessage;
-    std::wstring actionError;
+    std::wstring actionError, settingsLoadWarning;
     enum class FeedbackTone { Neutral, Info, Good, Waiting, Error };
     struct Feedback {
         FeedbackTone tone;
@@ -109,7 +109,7 @@ class PreviewWindow {
     ULONGLONG lastPaint = 0;
     BackBuffer backBuffer;
     HWND window = nullptr, targetWindow = nullptr, autoControl = nullptr;
-    bool running = false, autoClick = false;
+    bool running = false, autoClick = false, stopHotkeyRegistered = false;
     DWORD targetProcess = 0;
     std::wstring targetTitle;
     std::array<HWND, 4> colorEdits{};
@@ -179,6 +179,8 @@ class PreviewWindow {
     std::wstring pressTimingText() const;
     void finishClick(bool count = true);
     void disableClicks();
+    bool ensureStopHotkey();
+    void releaseStopHotkeyIfIdle();
     void cancelSelection();
     void beginAimSelection(SnapshotPurpose purpose = SnapshotPurpose::Color);
     void finishAimSelection();

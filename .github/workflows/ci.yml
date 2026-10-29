@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Build, test and verify batch-launched window
@@ -54,13 +54,18 @@ jobs:
           } finally {
             if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           }
+      - name: Require complete native test coverage
+        if: always()
+        shell: pwsh
+        run: python scripts/verify-test-results.py --junit build/Testing/windows-tests.xml --log build/Testing/Temporary/LastTest.log --require-complete
       - name: Upload test diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: TriggerLab-test-diagnostics
           path: |
             build-windows.log
+            build/Testing/windows-tests.xml
             build/Testing/Temporary/LastTest.log
             build/Release/*test-report.txt
           if-no-files-found: warn
@@ -82,7 +87,7 @@ jobs:
             }
           }
       - name: Upload Windows executable
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: TriggerLab-windows-x64
           path: |
@@ -97,7 +102,7 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-windows-package.ps1
       - name: Upload distribution archive
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: TriggerLab-portable-preview
           path: |
@@ -111,7 +116,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Check C++ formatting
@@ -121,7 +126,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Configure
@@ -131,7 +136,9 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Verify release recovery
-        run: python3 tests/release_workflow_tests.py
+        run: |
+          python3 tests/release_workflow_tests.py
+          python3 tests/test_results_tests.py
 
   portable-sanitizers:
     name: Portable core with ASan and UBSan
@@ -141,7 +148,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Configure instrumented Debug build
@@ -168,7 +175,7 @@ jobs:
       group: release-main
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Publish ZIP and checksum after successful tests

@@ -1,5 +1,6 @@
 #include "triggerlab/AnalyzerSettings.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 namespace triggerlab {
 bool validAnalyzerSettings(const AnalyzerSettings &s) noexcept {
@@ -52,8 +53,8 @@ ColorMask aimColorMask(const Frame &frame, const ColorMatchConfig &color, const 
     const bool diagonal = matching(cx - radius, cy - radius) && matching(cx + radius, cy - radius) &&
                           matching(cx - radius, cy + radius) && matching(cx + radius, cy + radius);
     const bool centered = settings.ignoreRadius == 0 ? matching(cx, cy) : (cardinal || diagonal);
-    mask.found =
-        centered && eligible > 0 && mask.matchingPixels > 0 && mask.coverage * 100 >= settings.minimumPercent;
+    mask.found = centered && eligible > 0 && mask.matchingPixels > 0 &&
+                 std::int64_t{mask.matchingPixels} * 100 >= std::int64_t{settings.minimumPercent} * eligible;
     return mask;
 }
 ColorSampleCheck compareColorSamples(const Frame *target, const Frame *background,

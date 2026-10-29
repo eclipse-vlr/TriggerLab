@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TriggerLab VERSION 0.4.4 LANGUAGES CXX)
+project(TriggerLab VERSION 0.4.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,6 +68,7 @@ if(WIN32)
     add_library(triggerlab_trainer STATIC
         src/win32/trainer/TrainerWindow.cpp
         src/win32/trainer/TrainerControls.cpp
+        src/win32/trainer/TrainerLayout.cpp
         src/win32/trainer/TrainerSession.cpp
         src/win32/trainer/TrainerPaint.cpp
     )
@@ -116,10 +117,13 @@ if(TRIGGERLAB_BUILD_TESTS)
             tests/win32/PreviewTestSupport.cpp
             tests/win32/PreviewTests.cpp
             tests/win32/PreviewIntegrationTests.cpp
+            tests/win32/PreviewAuditTests.cpp
         )
         target_link_libraries(TriggerLabUiTests PRIVATE triggerlab_preview_test_support)
         triggerlab_configure_target(TriggerLabUiTests)
 
+        add_test(NAME triggerlab_audit_transitions COMMAND TriggerLabUiTests --audit-transitions-test)
+        set_tests_properties(triggerlab_audit_transitions PROPERTIES TIMEOUT 25 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
         add_test(NAME triggerlab_input_recovery COMMAND TriggerLabUiTests --input-recovery-test)
         set_tests_properties(triggerlab_input_recovery PROPERTIES TIMEOUT 10 RUN_SERIAL TRUE)
         add_test(NAME triggerlab_target_sequence COMMAND TriggerLabUiTests --target-sequence-test)
