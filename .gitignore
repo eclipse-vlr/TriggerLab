@@ -6,7 +6,7 @@
 /.vscode/
 /settings.json
 /settings.json.tmp
-/codex_handoff.json
+/*_handoff*.json
 .env
 .env.*
 !.env.example
@@ -18,7 +18,6 @@
 *.ilk
 *.log
 /events.csv
-/codex_handoff_v0_4.json
 /selected-color.json
 /selected-color.json.tmp
 /analyzer-settings.json
